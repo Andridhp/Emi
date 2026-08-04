@@ -1,0 +1,62 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { useMemo, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppShell } from '@/components/AppShell';
+import { ProfileHeader } from '@/components/ProfileHeader';
+import { SectionTitle } from '@/components/SectionTitle';
+import { confirmedDocumentEvents } from '@/lib/documents';
+import { useAppStore } from '@/store/useAppStore';
+import { colors, webDepth } from '@/theme';
+import { FamilyEvent } from '@/types/domain';
+
+const startOfDay = (date: Date) => { const next = new Date(date); next.setHours(0, 0, 0, 0); return next; };
+const addDays = (date: Date, amount: number) => { const next = new Date(date); next.setDate(next.getDate() + amount); return next; };
+const sameDay = (iso: string, date: Date) => new Date(iso).toDateString() === date.toDateString();
+const minutesLabel = (minutes: number) => minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+
+export default function CalendarScreen() {
+  const router = useRouter();
+  const [weekOffset, setWeekOffset] = useState(0);
+  const { events, documents, profiles, activeProfileId } = useAppStore();
+  const isPregnancy = profiles.find((profile) => profile.id === activeProfileId)?.stage === 'pregnancy';
+  const allEvents = useMemo(() => [...events, ...confirmedDocumentEvents(documents)], [events, documents]);
+  const profileEvents = allEvents.filter((event) => event.profileId === activeProfileId);
+  const end = addDays(startOfDay(new Date()), weekOffset * 7);
+  const start = addDays(end, -6);
+  const endExclusive = addDays(end, 1);
+  const current = profileEvents.filter((event) => new Date(event.occurredAt) >= start && new Date(event.occurredAt) < endExclusive);
+  const priorStart = addDays(start, -7);
+  const prior = profileEvents.filter((event) => new Date(event.occurredAt) >= priorStart && new Date(event.occurredAt) < start);
+  const days = Array.from({ length: 7 }, (_, index) => { const date = addDays(start, index); const daily = current.filter((event) => sameDay(event.occurredAt, date)); const value = isPregnancy ? daily.length : daily.filter((event) => event.kind === 'sleep').reduce((sum, event) => sum + (event.value ?? 0), 0); return { date, value }; });
+  const max = Math.max(1, ...days.map((day) => day.value));
+  const totalSleep = current.filter((event) => event.kind === 'sleep').reduce((sum, event) => sum + (event.value ?? 0), 0);
+  const priorSleep = prior.filter((event) => event.kind === 'sleep').reduce((sum, event) => sum + (event.value ?? 0), 0);
+  const average = Math.round(totalSleep / 7);
+  const delta = average - Math.round(priorSleep / 7);
+  const feedings = current.filter((event) => event.kind === 'feeding').length;
+  const diapers = current.filter((event) => event.kind === 'diaper').length;
+  const symptoms = current.filter((event) => event.kind === 'symptom' || event.kind === 'temperature').length;
+  const prenatal = current.filter((event) => event.kind === 'prenatal').length;
+  const confirmedDocs = confirmedDocumentEvents(documents).filter((event) => event.profileId === activeProfileId).sort((a, b) => +new Date(b.occurredAt) - +new Date(a.occurredAt));
+  const periodTitle = `${start.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}–${end.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}`;
+
+  return <AppShell><ProfileHeader eyebrow="HISTORIAL" />
+    <Text style={styles.eyebrow}>UNA MIRADA TRANQUILA</Text><Text style={styles.title}>Patrones, no perfección</Text><Text style={styles.subtitle}>Observa la semana sin convertirla en una meta. Cada cálculo parte únicamente del perfil activo.</Text>
+    <View style={styles.period}><Pressable accessibilityRole="button" accessibilityLabel="Semana anterior" onPress={() => setWeekOffset((value) => value - 1)} style={styles.chevButton}><MaterialCommunityIcons name="chevron-left" size={21} color={colors.sageDark} /></Pressable><View><Text style={styles.periodTitle}>{periodTitle}</Text><Text style={styles.periodSub}>{weekOffset === 0 ? 'Esta semana' : 'Semana anterior'}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Semana siguiente" disabled={weekOffset >= 0} onPress={() => setWeekOffset((value) => Math.min(0, value + 1))} style={[styles.chevButton, weekOffset >= 0 && { opacity: .3 }]}><MaterialCommunityIcons name="chevron-right" size={21} color={colors.sageDark} /></Pressable></View>
+    <SectionTitle title={isPregnancy ? 'Actividad registrada' : 'Sueño registrado'} />
+    <View style={styles.chartCard}><View style={styles.chartHead}><View><Text style={styles.chartOverline}>{isPregnancy ? 'ACTIVIDAD' : 'PROMEDIO DIARIO'}</Text><Text style={styles.big}>{isPregnancy ? `${current.length} registros` : minutesLabel(average)}</Text><Text style={styles.small}>{isPregnancy ? 'en esta semana' : 'sueño registrado'}</Text></View>{!isPregnancy ? <View style={styles.delta}><MaterialCommunityIcons name={delta >= 0 ? 'trending-up' : 'trending-down'} size={15} color={colors.sageDark} /><Text style={styles.deltaText}>{Math.abs(delta)} min</Text></View> : null}</View><View style={styles.chart}>{days.map((day) => <View key={day.date.toISOString()} style={styles.column}><View style={styles.barTrack}><View style={[styles.bar, { height: `${day.value ? Math.max(8, Math.round(day.value / max * 100)) : 0}%` }]} /></View><Text style={styles.day}>{day.date.toLocaleDateString('es-MX', { weekday: 'narrow' }).toUpperCase()}</Text><Text style={[styles.date, sameDay(new Date().toISOString(), day.date) && styles.dateActive]}>{day.date.getDate()}</Text></View>)}</View><View style={styles.sourceLine}><MaterialCommunityIcons name="calculator-variant-outline" size={14} color={colors.muted} /><Text style={styles.caption}>{current.length ? `${current.length} registros utilizados · Cálculo de la app` : 'Aún no hay registros en esta semana'}</Text></View></View>
+    <SectionTitle title="Resumen semanal" /><View style={styles.summary}>{isPregnancy ? <><Summary icon="human-pregnant" color="#EEE8F5" value={String(prenatal)} label="Prenatal" note="registros" /><Summary icon="file-check-outline" color="#DCECE6" value={String(current.filter((event) => event.source === 'document').length)} label="Documentos" note="confirmados" /><Summary icon="heart-pulse" color="#F8E4D6" value={String(symptoms)} label="Síntomas" note="observados" /></> : <><Summary icon="mother-nurse" color="#F4D3C1" value={String(feedings)} label="Tomas" note="registradas" /><Summary icon="water-outline" color="#DCECE6" value={String(diapers)} label="Pañales" note="registrados" /><Summary icon="medical-bag" color="#F8E4D6" value={String(symptoms)} label="Síntomas" note="registrados" /></>}</View>
+    <SectionTitle title="Expediente vinculado" action="Ver documentos" onPress={() => router.push('/documents')} />
+    {confirmedDocs.length ? <View style={styles.documents}>{confirmedDocs.slice(0, 3).map((event) => <Pressable accessibilityRole="link" onPress={() => router.push({ pathname: '/document/[id]', params: { id: event.id.replace('document-event-', '') } })} key={event.id} style={styles.document}><View style={styles.documentIcon}><MaterialCommunityIcons name="file-check-outline" size={19} color={colors.sageDark} /></View><View style={{ flex: 1 }}><Text style={styles.documentTitle}>{event.title}</Text><Text style={styles.documentMeta}>{new Date(event.occurredAt).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })} · Confirmado por la familia</Text></View><MaterialCommunityIcons name="chevron-right" size={19} color={colors.muted} /></Pressable>)}</View> : <View style={styles.empty}><Text style={styles.emptyTitle}>Sin documentos confirmados</Text><Text style={styles.emptyBody}>Los datos aparecerán aquí después de revisarlos en el expediente.</Text></View>}
+  </AppShell>;
+}
+
+function Summary({ icon, color, value, label, note }: { icon: keyof typeof MaterialCommunityIcons.glyphMap; color: string; value: string; label: string; note: string }) { return <View style={styles.summaryItem}><View style={[styles.summaryIcon, { backgroundColor: color }]}><MaterialCommunityIcons name={icon} size={19} color={colors.sageDeep} /></View><Text style={styles.summaryValue}>{value}</Text><Text style={styles.summaryLabel}>{label}</Text><Text style={styles.small}>{note}</Text></View>; }
+
+const serif = Platform.select({ web: 'Georgia, Times New Roman, serif', ios: 'Georgia', android: 'serif' });
+const styles = StyleSheet.create({
+  eyebrow: { color: colors.sageDark, fontSize: 8, fontWeight: '900', letterSpacing: 1.3 }, title: { color: colors.ink, fontFamily: serif, fontSize: 31, lineHeight: 38, fontWeight: '700', letterSpacing: -.6, marginTop: 6 }, subtitle: { color: colors.muted, fontSize: 11, lineHeight: 17, marginTop: 5, maxWidth: 580 }, period: { marginTop: 20, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 7, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, periodTitle: { color: colors.ink, fontFamily: serif, fontSize: 13, fontWeight: '700', textAlign: 'center' }, periodSub: { color: colors.muted, fontSize: 8, textAlign: 'center', marginTop: 2 }, chevButton: { width: 42, height: 42, borderRadius: 15, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' },
+  chartCard: { backgroundColor: 'rgba(255,253,252,.94)', borderRadius: 25, borderWidth: 1, borderColor: colors.line, padding: 20, ...Platform.select({ web: { boxShadow: webDepth.raised } as any }) }, chartHead: { flexDirection: 'row', justifyContent: 'space-between' }, chartOverline: { color: colors.sageDark, fontSize: 7, fontWeight: '900', letterSpacing: 1 }, big: { color: colors.ink, fontFamily: serif, fontSize: 25, fontWeight: '700', marginTop: 3 }, small: { color: colors.muted, fontSize: 8, marginTop: 3 }, delta: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.mint, borderRadius: 11, paddingHorizontal: 9, paddingVertical: 6, alignSelf: 'flex-start' }, deltaText: { color: colors.sageDark, fontSize: 8, fontWeight: '900' }, chart: { height: 155, flexDirection: 'row', gap: 10, alignItems: 'flex-end', marginTop: 17 }, column: { flex: 1, alignItems: 'center' }, barTrack: { height: 108, width: '100%', maxWidth: 44, borderRadius: 9, backgroundColor: '#EEF1EC', justifyContent: 'flex-end', overflow: 'hidden' }, bar: { backgroundColor: colors.sage, borderRadius: 9 }, day: { color: colors.muted, fontSize: 8, marginTop: 7 }, date: { color: colors.ink, fontSize: 9, fontWeight: '800', marginTop: 2, width: 24, height: 24, textAlign: 'center', paddingTop: 5 }, dateActive: { color: colors.white, backgroundColor: colors.sageDeep, borderRadius: 12 }, sourceLine: { minHeight: 30, borderRadius: 11, backgroundColor: colors.mint, paddingHorizontal: 9, marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 }, caption: { color: colors.muted, fontSize: 7, textAlign: 'center' },
+  summary: { flexDirection: 'row', gap: 8 }, summaryItem: { flex: 1, backgroundColor: 'rgba(255,253,252,.92)', borderRadius: 21, borderWidth: 1, borderColor: colors.line, padding: 13, ...Platform.select({ web: { boxShadow: webDepth.soft } as any }) }, summaryIcon: { width: 37, height: 37, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,.72)', alignItems: 'center', justifyContent: 'center', ...Platform.select({ web: { boxShadow: webDepth.control } as any }) }, summaryValue: { color: colors.sageDeep, fontFamily: serif, fontSize: 21, fontWeight: '700', marginTop: 10 }, summaryLabel: { color: colors.ink, fontSize: 9, fontWeight: '900' }, documents: { gap: 8 }, document: { minHeight: 64, borderRadius: 19, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, documentIcon: { width: 39, height: 39, borderRadius: 15, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' }, documentTitle: { color: colors.ink, fontSize: 10, fontWeight: '900' }, documentMeta: { color: colors.muted, fontSize: 7, marginTop: 3 }, empty: { backgroundColor: colors.card, borderRadius: 20, borderWidth: 1, borderColor: colors.line, padding: 20, alignItems: 'center' }, emptyTitle: { color: colors.ink, fontSize: 11, fontWeight: '900' }, emptyBody: { color: colors.muted, fontSize: 8, marginTop: 4, textAlign: 'center' }
+});

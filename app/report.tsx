@@ -1,0 +1,153 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Platform, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppShell } from '@/components/AppShell';
+import { ProfileHeader } from '@/components/ProfileHeader';
+import { confirmedDocumentEvents } from '@/lib/documents';
+import { pendingQuestionTexts } from '@/lib/consultationQuestions';
+import { assessReportReadiness, buildConsultationReport, ConsultationReportOptions, createConsultationReport, ReportPeriod, reportPeriods, ReportSection, reportSections, ReportType } from '@/lib/report';
+import { useAppStore } from '@/store/useAppStore';
+import { colors, webDepth } from '@/theme';
+import { useAuth } from '@/context/AuthContext';
+import { createProtectedReportShare, deletePrivateReport, listProtectedReportShares, ProtectedReportShare, ReportShareSummary, revokeProtectedReportShare, uploadPrivateReport } from '@/lib/cloudReports';
+import { buildConsultationPdf, consultationPdfFileName, downloadConsultationPdf } from '@/lib/reportPdf';
+
+const shareDurations = [
+  { label: '1 hora', minutes: 60 },
+  { label: '24 horas', minutes: 1440 },
+  { label: '7 días', minutes: 10080 }
+];
+
+type ReportFeedback = { title: string; body: string; tone: 'info' | 'success' | 'error' };
+
+export default function ReportScreen() {
+  const [type, setType] = useState<ReportType>('routine');
+  const [periodIndex, setPeriodIndex] = useState(1);
+  const [selected, setSelected] = useState<Set<ReportSection>>(() => new Set(reportSections.map((item) => item.id)));
+  const [reason, setReason] = useState('');
+  const [questions, setQuestions] = useState('');
+  const [busy, setBusy] = useState<'pdf' | 'link' | 'revoke'>();
+  const [durationIndex, setDurationIndex] = useState(1);
+  const [activeShare, setActiveShare] = useState<ProtectedReportShare>();
+  const [shares, setShares] = useState<ReportShareSummary[]>([]);
+  const [feedback, setFeedback] = useState<ReportFeedback>();
+  const { demoSession } = useAuth();
+  const { events, documents, profiles, prenatalRecords, birthRecords, postpartumRecords, consultationQuestions, activeProfileId, profileNames } = useAppStore();
+  const reportEvents = useMemo(() => [...events, ...confirmedDocumentEvents(documents)], [events, documents]);
+  const period = reportPeriods[periodIndex];
+  const profile = profiles.find((item) => item.id === activeProfileId);
+  const profileName = profileNames[activeProfileId] || profile?.name || 'Familia';
+  const availableSections = reportSections.filter((section) => (section.id !== 'prenatal' || profile?.stage === 'pregnancy') && (section.id !== 'birthPostpartum' || profile?.stage === 'child'));
+  const activeSections = useMemo(() => new Set([...selected].filter((section) => (section !== 'prenatal' || profile?.stage === 'pregnancy') && (section !== 'birthPostpartum' || profile?.stage === 'child'))), [selected, profile?.stage]);
+  const customQuestions = useMemo(() => [...pendingQuestionTexts(consultationQuestions, activeProfileId), ...questions.split('\n').map((question) => question.trim()).filter(Boolean)], [consultationQuestions, activeProfileId, questions]);
+  const options: ConsultationReportOptions = useMemo(() => ({ type, profileId: activeProfileId, profileName, period: period.id as ReportPeriod, sections: activeSections, reason, customQuestions, prenatalRecord: profile?.stage === 'pregnancy' ? prenatalRecords[activeProfileId] : undefined, birthRecord: profile?.stage === 'child' ? birthRecords[activeProfileId] : undefined, postpartumRecord: profile?.stage === 'child' ? postpartumRecords[activeProfileId] : undefined }), [type, activeProfileId, profileName, period.id, activeSections, reason, customQuestions, profile?.stage, prenatalRecords, birthRecords, postpartumRecords]);
+  const report = useMemo(() => createConsultationReport(reportEvents, options), [reportEvents, options]);
+  const readiness = useMemo(() => assessReportReadiness(report), [report]);
+  const sleepLabel = report.sleepMinutes >= 60 ? `${Math.floor(report.sleepMinutes / 60)} h ${report.sleepMinutes % 60} min` : `${report.sleepMinutes} min`;
+  const notify = (title: string, body: string, tone: ReportFeedback['tone'] = 'info') => {
+    setFeedback({ title, body, tone });
+    if (Platform.OS !== 'web') Alert.alert(title, body);
+  };
+  const refreshShares = async () => {
+    if (demoSession || !activeProfileId) { setShares([]); return; }
+    try { setShares(await listProtectedReportShares(activeProfileId)); } catch { setShares([]); }
+  };
+  useEffect(() => { void refreshShares(); }, [activeProfileId, demoSession]);
+  const exportPdf = async () => {
+    setBusy('pdf');
+    try {
+      const html = buildConsultationReport(reportEvents, options);
+      if (Platform.OS === 'web') {
+        const bytes = buildConsultationPdf(report);
+        downloadConsultationPdf(bytes, consultationPdfFileName(profileName));
+        notify('PDF descargado', 'El archivo contiene información sensible. Guárdalo sólo en un lugar protegido.', 'success');
+        return;
+      }
+      const { uri } = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Compartir resumen para consulta' });
+      else notify('PDF generado', uri, 'success');
+    } catch { notify('No se pudo generar el PDF', 'Inténtalo nuevamente. Tus registros no se modificaron.', 'error'); }
+    finally { setBusy(undefined); }
+  };
+  const createLink = async () => {
+    if (demoSession) { notify('Disponible con una cuenta', 'La demostración no sube información ni crea enlaces externos. El PDF local sí funciona.'); return; }
+    setBusy('link');
+    let uploaded: { reportId: string; storagePath: string } | undefined;
+    const fileName = consultationPdfFileName(profileName);
+    try {
+      const bytes = buildConsultationPdf(report);
+      uploaded = await uploadPrivateReport({
+        profileId: activeProfileId, clientId: `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        fileName, bytes, reportType: type, periodStart: report.periodStart, periodEnd: report.periodEnd
+      });
+      const created = await createProtectedReportShare(uploaded.reportId, fileName, uploaded.storagePath, shareDurations[durationIndex].minutes);
+      setActiveShare(created); notify('Enlace protegido listo', 'El token se muestra una sola vez. Compártelo únicamente con el profesional elegido.', 'success'); await refreshShares();
+    } catch {
+      if (uploaded) try { await deletePrivateReport(uploaded.reportId, uploaded.storagePath); } catch { /* remains private and unshared */ }
+      notify('No se creó el enlace', 'El reporte no se compartió. Revisa la conexión y que el servidor tenga la migración más reciente.', 'error');
+    } finally { setBusy(undefined); }
+  };
+  const shareLink = async () => {
+    if (!activeShare) return;
+    try {
+      if (Platform.OS === 'web' && navigator.clipboard) {
+        await navigator.clipboard.writeText(activeShare.url); notify('Enlace copiado', 'Compártelo únicamente con el profesional elegido.', 'success'); return;
+      }
+      await Share.share({ message: `Resumen para consulta de ${profileName}: ${activeShare.url}` });
+    } catch {
+      notify('No se pudo compartir', 'Selecciona el enlace, cópialo manualmente y compártelo sólo con el profesional elegido.', 'error');
+    }
+  };
+  const revoke = async (shareId: string) => {
+    setBusy('revoke');
+    try {
+      await revokeProtectedReportShare(shareId);
+      if (activeShare?.shareId === shareId) setActiveShare(undefined);
+      notify('Enlace revocado', 'El acceso dejó de estar disponible.', 'success'); await refreshShares();
+    } catch { notify('No se revocó el enlace', 'Revisa la conexión e inténtalo nuevamente.', 'error'); }
+    finally { setBusy(undefined); }
+  };
+
+  const chooseType = (next: ReportType) => { setType(next); if (next === 'illness') setPeriodIndex(0); };
+  return <AppShell><ProfileHeader eyebrow="PARA TU PROFESIONAL" />
+    <Text style={styles.title}>Resumen para consulta</Text><Text style={styles.subtitle}>El PDF se construye únicamente con este perfil, periodo y las secciones que elijas.</Text>
+    <View style={styles.segment}><Pressable accessibilityRole="button" accessibilityLabel="Control rutinario" accessibilityState={{ selected: type === 'routine' }} style={[styles.segmentItem, type === 'routine' && styles.segmentActive]} onPress={() => chooseType('routine')}><MaterialCommunityIcons name="calendar-heart" size={19} color={type === 'routine' ? colors.white : colors.muted} /><Text style={[styles.segmentText, type === 'routine' && styles.segmentTextActive]}>Control rutinario</Text></Pressable><Pressable accessibilityRole="button" accessibilityLabel="Enfermedad" accessibilityState={{ selected: type === 'illness' }} style={[styles.segmentItem, type === 'illness' && styles.segmentActive]} onPress={() => chooseType('illness')}><MaterialCommunityIcons name="thermometer-alert" size={19} color={type === 'illness' ? colors.white : colors.muted} /><Text style={[styles.segmentText, type === 'illness' && styles.segmentTextActive]}>Enfermedad</Text></Pressable></View>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Cambiar periodo. ${period.title}`} onPress={() => setPeriodIndex((periodIndex + 1) % reportPeriods.length)} style={styles.field}><Text style={styles.fieldLabel}>Periodo</Text><View style={{ flex: 1 }}><Text style={styles.fieldValue}>{period.title}</Text><Text style={styles.fieldSub}>{report.dateRange}</Text></View><MaterialCommunityIcons name="chevron-down" size={21} color={colors.muted} /></Pressable>
+    <Text style={styles.section}>PREPARAR LA CONVERSACIÓN</Text>
+    <View style={styles.promptCard}><Text style={styles.promptLabel}>Motivo o prioridad · opcional</Text><TextInput accessibilityLabel="Motivo de la consulta" value={reason} onChangeText={setReason} placeholder={type === 'illness' ? 'Qué ocurrió y desde cuándo' : 'Qué te gustaría revisar'} multiline style={styles.promptInput} /><Text style={styles.promptLabel}>Preguntas adicionales · una por línea</Text><TextInput accessibilityLabel="Preguntas para el profesional" value={questions} onChangeText={setQuestions} placeholder={'Ej. ¿Qué cambios conviene vigilar?\nEj. ¿Cuándo sería la próxima revisión?'} multiline style={[styles.promptInput, styles.questionsInput]} /><Text style={styles.promptHelp}>{pendingQuestionTexts(consultationQuestions, activeProfileId).length} preguntas guardadas se incluyen automáticamente. Emi agregará preguntas generales después de las tuyas.</Text></View>
+    <View style={styles.readiness}><View style={styles.readinessHead}><View><Text style={styles.readinessTitle}>Antes de compartir</Text><Text style={styles.readinessMeta}>{readiness.completed} de {readiness.total} puntos preparados</Text></View><View style={styles.score}><Text style={styles.scoreText}>{readiness.completed}/{readiness.total}</Text></View></View>{readiness.items.map((item) => <View key={item.id} style={styles.readinessItem}><MaterialCommunityIcons name={item.level === 'ready' ? 'check-circle' : 'circle-edit-outline'} size={18} color={item.level === 'ready' ? colors.sageDark : '#A16E27'} /><View style={{ flex: 1 }}><Text style={styles.readinessLabel}>{item.label}</Text><Text style={styles.readinessDetail}>{item.detail}</Text></View></View>)}<Text style={styles.readinessNote}>Los puntos pendientes son recordatorios, no interpretaciones médicas. Puedes exportar aunque un dato no exista.</Text></View>
+    <Text style={styles.section}>INCLUIR EN EL INFORME</Text>
+    <View style={styles.list}>{availableSections.map((item) => { const checked = selected.has(item.id); return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked }} onPress={() => setSelected((current) => { const next = new Set(current); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} key={item.id} style={styles.listItem}><View style={[styles.check, !checked && styles.checkOff]}>{checked ? <MaterialCommunityIcons name="check" size={14} color="#FFF" /> : null}</View><Text style={styles.listText}>{item.label}</Text></Pressable>; })}</View>
+    <Text style={styles.section}>VISTA PREVIA REAL</Text>
+    <View style={styles.preview}><View style={styles.previewTop}><View><Text style={styles.previewTitle}>Resumen para consulta</Text><Text style={styles.previewMeta}>{profileName} · {report.dateRange}</Text></View><View style={styles.logo}><Text style={styles.logoText}>{profileName.slice(0, 1).toUpperCase()}</Text></View></View><View style={styles.rule} />
+      <View style={styles.previewStatus}><Text style={styles.previewStatusValue}>{report.events.length}</Text><Text style={styles.previewStatusText}>registros incluidos · {activeSections.size} secciones</Text></View>
+      {report.reason ? <View style={styles.previewReason}><Text style={styles.previewReasonLabel}>PRIORIDAD PARA LA CONSULTA</Text><Text style={styles.previewBody}>{report.reason}</Text></View> : null}
+      <Text style={styles.previewHeading}>Vista rápida</Text><View style={styles.previewStats}><Mini value={String(report.counts.feeding)} label="Tomas" /><Mini value={sleepLabel} label="Sueño" /><Mini value={String(report.counts.diaper)} label="Pañales" /></View>
+      {profile?.stage === 'pregnancy' ? <View style={[styles.previewStats, { marginTop: 7 }]}><Mini value={String(report.counts.prenatal)} label="Seguimiento prenatal" /><Mini value={report.prenatalRecord?.dueDate || '—'} label="FPP registrada" /><Mini value={String(customQuestions.length)} label="Preguntas propias" /></View> : null}
+      {profile?.stage === 'child' && activeSections.has('birthPostpartum') ? <View style={[styles.previewStats, { marginTop: 7 }]}><Mini value={report.birthRecord ? 'Sí' : 'No'} label="Nacimiento" /><Mini value={report.postpartumRecord ? 'Sí' : 'No'} label="Posparto" /><Mini value={String(customQuestions.length)} label="Preguntas propias" /></View> : null}
+      <Text style={styles.previewHeading}>Trazabilidad</Text><Text style={styles.previewBody}>{report.sourceCounts.parent ?? 0} registros familiares · {report.sourceCounts.calculated ?? 0} cálculos de la app · {report.sourceCounts.document ?? 0} datos documentales.</Text><View style={styles.origin}><Text style={styles.originText}>✦ El PDF conservará el origen de cada registro</Text></View>
+    </View>
+    {report.events.length === 0 ? <View style={styles.empty}><MaterialCommunityIcons name="calendar-blank-outline" size={19} color="#8B6622" /><Text style={styles.emptyText}>No hay registros de {profileName} en este periodo.{report.prenatalRecord ? ' El expediente prenatal sí puede incluirse.' : ' Puedes cambiar el periodo antes de generar el PDF.'}</Text></View> : null}
+    <View style={styles.notice}><MaterialCommunityIcons name="information-outline" size={20} color="#8B6622" /><Text style={styles.noticeText}>Revisa la vista previa antes de compartir. Este informe organiza información; no diagnostica ni recomienda tratamientos.</Text></View>
+    <Pressable accessibilityRole="button" accessibilityLabel={Platform.OS === 'web' ? 'Descargar PDF' : 'Generar y compartir PDF'} style={[styles.export, (!readiness.readyToExport || Boolean(busy)) && styles.exportDisabled]} disabled={!readiness.readyToExport || Boolean(busy)} onPress={exportPdf}><MaterialCommunityIcons name="file-pdf-box" size={21} color="#FFF" /><Text style={styles.exportText}>{busy === 'pdf' ? 'Preparando PDF…' : Platform.OS === 'web' ? 'Descargar PDF' : 'Generar y compartir PDF'}</Text></Pressable>
+    <Text style={styles.section}>COMPARTIR CON ENLACE PROTEGIDO</Text>
+    <View style={styles.sharePanel}>
+      <View style={styles.shareHead}><View style={styles.shareIcon}><MaterialCommunityIcons name="link-lock" size={22} color={colors.sageDark} /></View><View style={{ flex: 1 }}><Text style={styles.shareTitle}>Acceso temporal y revocable</Text><Text style={styles.shareBody}>{demoSession ? 'La demostración nunca sube el reporte. Inicia sesión para habilitar esta opción.' : 'El PDF se guarda en un contenedor privado. El enlace deja de funcionar al vencer o cuando lo revoques.'}</Text></View></View>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Cambiar vigencia. ${shareDurations[durationIndex].label}`} onPress={() => setDurationIndex((durationIndex + 1) % shareDurations.length)} style={styles.duration}><Text style={styles.durationLabel}>Vigencia</Text><Text style={styles.durationValue}>{shareDurations[durationIndex].label}</Text><MaterialCommunityIcons name="chevron-down" size={18} color={colors.sageDark} /></Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Crear enlace protegido" disabled={!readiness.readyToExport || Boolean(busy)} onPress={() => void createLink()} style={[styles.linkButton, (!readiness.readyToExport || Boolean(busy)) && styles.exportDisabled]}><MaterialCommunityIcons name="shield-link-variant-outline" size={19} color="#FFF" /><Text style={styles.linkButtonText}>{busy === 'link' ? 'Protegiendo reporte…' : 'Crear enlace protegido'}</Text></Pressable>
+      {activeShare ? <View style={styles.createdLink}><View style={styles.createdTop}><MaterialCommunityIcons name="check-decagram-outline" size={20} color={colors.sageDark} /><View style={{ flex: 1 }}><Text style={styles.createdTitle}>Enlace listo</Text><Text style={styles.createdMeta}>Vence {new Date(activeShare.expiresAt).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}. El token sólo se muestra en esta ocasión.</Text></View></View><Text selectable numberOfLines={2} style={styles.linkText}>{activeShare.url}</Text><View style={styles.createdActions}><Pressable accessibilityRole="button" onPress={() => void shareLink()} style={styles.copyButton}><MaterialCommunityIcons name={Platform.OS === 'web' ? 'content-copy' : 'share-variant-outline'} size={17} color={colors.sageDark} /><Text style={styles.copyText}>{Platform.OS === 'web' ? 'Copiar enlace' : 'Compartir enlace'}</Text></Pressable><Pressable accessibilityRole="button" disabled={busy === 'revoke'} onPress={() => void revoke(activeShare.shareId)} style={styles.revokeButton}><Text style={styles.revokeText}>Revocar ahora</Text></Pressable></View></View> : null}
+    </View>
+    {feedback ? <View accessibilityRole="alert" style={[styles.feedback, feedback.tone === 'error' && styles.feedbackError, feedback.tone === 'success' && styles.feedbackSuccess]}><MaterialCommunityIcons name={feedback.tone === 'error' ? 'alert-circle-outline' : feedback.tone === 'success' ? 'check-circle-outline' : 'information-outline'} size={20} color={feedback.tone === 'error' ? '#944C4C' : colors.sageDark} /><View style={{ flex: 1 }}><Text style={styles.feedbackTitle}>{feedback.title}</Text><Text style={styles.feedbackBody}>{feedback.body}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Cerrar aviso" onPress={() => setFeedback(undefined)} style={styles.feedbackClose}><MaterialCommunityIcons name="close" size={18} color={colors.muted} /></Pressable></View> : null}
+    {!demoSession && shares.length ? <View style={styles.shareHistory}><Text style={styles.shareHistoryTitle}>ENLACES RECIENTES</Text>{shares.slice(0, 5).map((item) => { const active = !item.revokedAt && new Date(item.expiresAt).getTime() > Date.now(); return <View key={item.shareId} style={styles.shareRow}><MaterialCommunityIcons name={active ? 'link-variant' : 'link-variant-off'} size={18} color={active ? colors.sageDark : colors.muted} /><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.shareFile}>{item.fileName}</Text><Text style={styles.shareMeta}>{active ? `Activo hasta ${new Date(item.expiresAt).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}` : item.revokedAt ? 'Revocado' : 'Expirado'} · {item.accessCount} {item.accessCount === 1 ? 'apertura' : 'aperturas'}</Text></View>{active ? <Pressable accessibilityRole="button" disabled={busy === 'revoke'} onPress={() => void revoke(item.shareId)} style={styles.rowRevoke}><Text style={styles.rowRevokeText}>Revocar</Text></Pressable> : null}</View>; })}</View> : null}
+    <Pressable accessibilityRole="button" accessibilityLabel="Privacidad y consentimiento" style={styles.privacy} onPress={() => notify('Privacidad y consentimiento', 'El informe contiene únicamente el perfil y periodo mostrados. Revisa su contenido antes de compartirlo.')}><MaterialCommunityIcons name="shield-lock-outline" size={18} color={colors.sageDark} /><Text style={styles.privacyText}>Privacidad y consentimiento</Text></Pressable>
+  </AppShell>;
+}
+
+function Mini({ value, label }: { value: string; label: string }) { return <View style={styles.mini}><Text style={styles.miniValue}>{value}</Text><Text style={styles.miniLabel}>{label}</Text></View>; }
+const styles = StyleSheet.create({
+  title: { color: colors.ink, fontSize: 27, fontWeight: '800' }, subtitle: { color: colors.muted, fontSize: 12, lineHeight: 18, marginTop: 4 }, segment: { flexDirection: 'row', backgroundColor: 'rgba(236,235,230,.9)', borderRadius: 20, padding: 4, marginTop: 20, ...Platform.select({ web: { boxShadow: webDepth.soft } as any }) }, segmentItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 43, borderRadius: 14 }, segmentActive: { backgroundColor: colors.sageDark }, segmentText: { color: colors.muted, fontSize: 11, fontWeight: '700' }, segmentTextActive: { color: colors.white }, field: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, borderRadius: 18, padding: 14, flexDirection: 'row', alignItems: 'center', marginTop: 12 }, fieldLabel: { color: colors.muted, fontSize: 10, width: 66 }, fieldValue: { color: colors.ink, fontSize: 12, fontWeight: '800' }, fieldSub: { color: colors.muted, fontSize: 9, marginTop: 2 }, section: { color: colors.muted, fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 22, marginBottom: 9 }, promptCard: { backgroundColor: 'rgba(255,253,252,.92)', borderRadius: 22, borderWidth: 1, borderColor: colors.line, padding: 15, ...Platform.select({ web: { boxShadow: webDepth.soft } as any }) }, promptLabel: { color: colors.ink, fontSize: 9, fontWeight: '800', marginBottom: 6, marginTop: 5 }, promptInput: { minHeight: 57, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.canvas, padding: 11, color: colors.ink, fontSize: 10, textAlignVertical: 'top' }, questionsInput: { minHeight: 78 }, promptHelp: { color: colors.muted, fontSize: 8, marginTop: 7 }, readiness: { backgroundColor: colors.mint, borderRadius: 20, borderWidth: 1, borderColor: '#CFE0D8', padding: 14, marginTop: 12 }, readinessHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }, readinessTitle: { color: colors.ink, fontSize: 13, fontWeight: '900' }, readinessMeta: { color: colors.muted, fontSize: 8, marginTop: 2 }, score: { width: 39, height: 39, borderRadius: 14, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' }, scoreText: { color: colors.sageDark, fontSize: 10, fontWeight: '900' }, readinessItem: { flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderTopColor: '#D3E2DB', paddingVertical: 8 }, readinessLabel: { color: colors.ink, fontSize: 9, fontWeight: '800' }, readinessDetail: { color: colors.muted, fontSize: 8, marginTop: 2 }, readinessNote: { color: colors.muted, fontSize: 8, lineHeight: 12, marginTop: 5 }, list: { backgroundColor: colors.white, borderRadius: 20, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14 }, listItem: { minHeight: 39, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderBottomColor: '#F1F0EC' }, check: { width: 20, height: 20, borderRadius: 7, backgroundColor: colors.sageDark, alignItems: 'center', justifyContent: 'center' }, checkOff: { backgroundColor: colors.white, borderWidth: 1, borderColor: '#B9C2BF' }, listText: { color: colors.ink, fontSize: 11, fontWeight: '600' }, preview: { backgroundColor: 'rgba(255,253,252,.94)', borderRadius: 23, borderWidth: 1, borderColor: colors.line, padding: 18, ...Platform.select({ web: { boxShadow: webDepth.raised } as any }) }, previewTop: { flexDirection: 'row', justifyContent: 'space-between' }, previewTitle: { color: colors.ink, fontSize: 15, fontWeight: '800' }, previewMeta: { color: colors.muted, fontSize: 9, marginTop: 3 }, logo: { width: 33, height: 33, borderRadius: 13, backgroundColor: colors.peach, alignItems: 'center', justifyContent: 'center' }, logoText: { color: '#744A3A', fontWeight: '800' }, rule: { height: 1, backgroundColor: colors.line, marginVertical: 13 }, previewStatus: { flexDirection: 'row', alignItems: 'baseline', gap: 5, marginBottom: 10 }, previewStatusValue: { color: colors.sageDark, fontSize: 20, fontWeight: '900' }, previewStatusText: { color: colors.muted, fontSize: 9 }, previewReason: { backgroundColor: colors.peachSoft, borderRadius: 10, padding: 9, marginBottom: 9 }, previewReasonLabel: { color: '#8F5C4B', fontSize: 7, fontWeight: '900', marginBottom: 4 }, previewHeading: { color: colors.ink, fontWeight: '800', fontSize: 10, marginBottom: 7, marginTop: 4 }, previewStats: { flexDirection: 'row', gap: 7 }, mini: { flex: 1, backgroundColor: colors.canvas, borderRadius: 11, padding: 9 }, miniValue: { color: colors.ink, fontSize: 13, fontWeight: '800' }, miniLabel: { color: colors.muted, fontSize: 7, marginTop: 2 }, previewBody: { color: colors.muted, fontSize: 9, lineHeight: 14 }, origin: { backgroundColor: colors.mint, borderRadius: 8, padding: 6, marginTop: 8 }, originText: { color: colors.sageDark, fontSize: 8, fontWeight: '700' }, empty: { flexDirection: 'row', gap: 8, padding: 12, backgroundColor: '#FFF4DD', borderRadius: 14, marginTop: 10 }, emptyText: { color: '#795F2E', fontSize: 9, lineHeight: 14, flex: 1 }, notice: { flexDirection: 'row', gap: 9, padding: 13, backgroundColor: '#FFF4DD', borderRadius: 15, marginTop: 12 }, noticeText: { color: '#795F2E', fontSize: 9, lineHeight: 14, flex: 1 }, export: { height: 54, borderRadius: 18, backgroundColor: colors.sageDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14 }, exportDisabled: { opacity: .4 }, exportText: { color: colors.white, fontSize: 13, fontWeight: '800' },
+  sharePanel: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, borderRadius: 22, padding: 15, ...Platform.select({ web: { boxShadow: webDepth.soft } as any }) }, shareHead: { flexDirection: 'row', gap: 11, alignItems: 'flex-start' }, shareIcon: { width: 43, height: 43, borderRadius: 15, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' }, shareTitle: { color: colors.ink, fontSize: 11, fontWeight: '900' }, shareBody: { color: colors.muted, fontSize: 8, lineHeight: 13, marginTop: 3 }, duration: { height: 45, borderRadius: 14, backgroundColor: colors.canvas, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', marginTop: 13 }, durationLabel: { color: colors.muted, fontSize: 8, width: 62 }, durationValue: { flex: 1, color: colors.ink, fontSize: 10, fontWeight: '900' }, linkButton: { height: 49, borderRadius: 16, backgroundColor: colors.sageDeep, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 9 }, linkButtonText: { color: colors.white, fontSize: 10, fontWeight: '900' }, createdLink: { backgroundColor: colors.mint, borderRadius: 17, padding: 13, marginTop: 12, borderWidth: 1, borderColor: '#CDE0D9' }, createdTop: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' }, createdTitle: { color: colors.ink, fontSize: 10, fontWeight: '900' }, createdMeta: { color: colors.muted, fontSize: 7, lineHeight: 12, marginTop: 2 }, linkText: { color: colors.sageDeep, fontSize: 7, lineHeight: 11, backgroundColor: colors.white, borderRadius: 10, padding: 9, marginTop: 9 }, createdActions: { flexDirection: 'row', gap: 8, marginTop: 9 }, copyButton: { flex: 1, height: 39, borderRadius: 12, backgroundColor: colors.white, flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center' }, copyText: { color: colors.sageDark, fontSize: 8, fontWeight: '900' }, revokeButton: { minWidth: 92, height: 39, borderRadius: 12, backgroundColor: '#FBEAEA', alignItems: 'center', justifyContent: 'center' }, revokeText: { color: '#944C4C', fontSize: 8, fontWeight: '900' }, shareHistory: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, borderRadius: 20, padding: 14, marginTop: 10 }, shareHistoryTitle: { color: colors.muted, fontSize: 8, fontWeight: '900', letterSpacing: 1, marginBottom: 4 }, shareRow: { minHeight: 57, flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderBottomColor: colors.line }, shareFile: { color: colors.ink, fontSize: 9, fontWeight: '800' }, shareMeta: { color: colors.muted, fontSize: 7, marginTop: 3 }, rowRevoke: { paddingHorizontal: 9, paddingVertical: 7, borderRadius: 10, backgroundColor: '#FBEAEA' }, rowRevokeText: { color: '#944C4C', fontSize: 7, fontWeight: '900' }, privacy: { height: 44, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 7 }, privacyText: { color: colors.sageDark, fontSize: 10, fontWeight: '700' },
+  feedback: { minHeight: 62, flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 10, padding: 12, borderRadius: 17, backgroundColor: '#FFF4DD', borderWidth: 1, borderColor: '#E8D2AA' }, feedbackSuccess: { backgroundColor: colors.mint, borderColor: '#CDE0D9' }, feedbackError: { backgroundColor: '#FBEAEA', borderColor: '#EDCACA' }, feedbackTitle: { color: colors.ink, fontSize: 10, fontWeight: '900' }, feedbackBody: { color: colors.muted, fontSize: 8, lineHeight: 13, marginTop: 3 }, feedbackClose: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', marginTop: -5, marginRight: -5 },
+});

@@ -1,0 +1,41 @@
+{
+  "name": "emilia-familias",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@supabase/supabase-js": "^2.89.0",
+    "expo": "^57.0.0",
+    "expo-document-picker": "^57.0.1",
+    "expo-linear-gradient": "^57.0.1",
+    "expo-print": "^57.0.1",
+    "expo-router": "^57.0.6",
+    "expo-sharing": "^57.0.5",
+    "expo-status-bar": "^57.0.1",
+    "jspdf": "^4.2.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-native": "0.84.0",
+    "react-native-safe-area-context": "^5.8.0",
+    "react-native-screens": "^4.26.1",
+    "react-native-url-polyfill": "^3.0.0",
+    "react-native-web": "^0.21.2",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "@vitest/coverage-v8": "^4.0.16",
+    "typescript": "~5.9.2",
+    "vitest": "^4.0.16"
+  }
+}

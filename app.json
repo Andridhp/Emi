@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Emi",
+    "slug": "emilia-familias",
+    "version": "0.1.0",
+    "icon": "./assets/icon.png",
+    "orientation": "portrait",
+    "scheme": "emilia",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "mx.emilia.familias",
+      "icon": "./assets/icon.png"
+    },
+    "android": {
+      "package": "mx.emilia.familias",
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FBF8F2"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["expo-router", "expo-document-picker"],
+    "experiments": { "typedRoutes": true }
+  }
+}
