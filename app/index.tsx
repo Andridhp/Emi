@@ -6,6 +6,7 @@ import { useRef } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BrandMark } from '@/components/BrandMark';
 import { useAuth } from '@/context/AuthContext';
+import { useAppStore } from '@/store/useAppStore';
 import { colors } from '@/theme';
 
 const clues: { icon: keyof typeof MaterialCommunityIcons.glyphMap; eyebrow: string; title: string; tone: string; side: 'left' | 'right' }[] = [
@@ -18,9 +19,10 @@ const clues: { icon: keyof typeof MaterialCommunityIcons.glyphMap; eyebrow: stri
 export default function WelcomeScreen() {
   const router = useRouter();
   const { height } = useWindowDimensions();
-  const { enterDemo, isAuthenticated } = useAuth();
+  const { enterLocal, isAuthenticated } = useAuth();
+  const hasCompletedOnboarding = useAppStore((state) => state.hasCompletedOnboarding);
   const scrollY = useRef(new Animated.Value(0)).current;
-  const demo = async () => { await enterDemo(); router.push('/consent'); };
+  const startLocal = async () => { await enterLocal(); router.push('/consent'); };
   const heroHeight = Math.max(660, height - 1);
 
   return <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
@@ -75,10 +77,10 @@ export default function WelcomeScreen() {
         <BrandMark size={48} />
         <Text style={styles.closeTitle}>Tu familia no necesita hacerlo perfecto.</Text>
         <Text style={styles.closeBody}>Emi acompaña con evidencia y sensibilidad. No diagnostica ni sustituye atención profesional.</Text>
-        {isAuthenticated ? <Pressable accessibilityRole="link" onPress={() => router.push('/home')} style={styles.primary}><Text style={styles.primaryText}>Continuar a Emi</Text><MaterialCommunityIcons name="arrow-right" size={19} color="#FFF" /></Pressable> : <>
+        {isAuthenticated ? <Pressable accessibilityRole="link" onPress={() => router.push(hasCompletedOnboarding ? '/home' : '/consent')} style={styles.primary}><Text style={styles.primaryText}>Continuar a Emi</Text><MaterialCommunityIcons name="arrow-right" size={19} color="#FFF" /></Pressable> : <>
           <Pressable accessibilityRole="link" onPress={() => router.push('/auth/sign-up')} style={styles.primary}><Text style={styles.primaryText}>Crear mi cuenta</Text><MaterialCommunityIcons name="arrow-right" size={19} color="#FFF" /></Pressable>
           <Pressable accessibilityRole="link" onPress={() => router.push('/auth/sign-in')} style={styles.secondary}><Text style={styles.secondaryText}>Ya tengo cuenta</Text></Pressable>
-          <Pressable accessibilityRole="button" onPress={demo} style={styles.demo}><MaterialCommunityIcons name="flask-outline" size={17} color={colors.sageDark} /><Text style={styles.demoText}>Explorar demostración</Text></Pressable>
+          <Pressable accessibilityRole="button" onPress={startLocal} style={styles.demo}><MaterialCommunityIcons name="cellphone-lock" size={17} color={colors.sageDark} /><Text style={styles.demoText}>Usar Emi gratis en este dispositivo</Text></Pressable>
         </>}
       </View>
     </Animated.ScrollView>

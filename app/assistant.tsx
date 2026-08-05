@@ -75,7 +75,7 @@ export default function AssistantScreen() {
 
     <Text style={styles.section}>ANTES DE ENVIAR</Text>
     <View style={styles.dataCard}>
-      <View style={styles.dataHead}><MaterialCommunityIcons name={demoSession ? 'cellphone-lock' : 'shield-lock-outline'} size={22} color={colors.sageDark} /><View style={{ flex: 1 }}><Text style={styles.dataTitle}>{demoSession ? 'Vista local de demostración' : 'Solicitud protegida y mínima'}</Text><Text style={styles.dataBody}>{demoSession ? 'Nada saldrá de este navegador.' : 'La app pedirá al servidor únicamente la información indicada.'}</Text></View></View>
+      <View style={styles.dataHead}><MaterialCommunityIcons name={demoSession ? 'cellphone-lock' : 'shield-lock-outline'} size={22} color={colors.sageDark} /><View style={{ flex: 1 }}><Text style={styles.dataTitle}>{demoSession ? 'Análisis local gratuito' : 'Solicitud protegida y mínima'}</Text><Text style={styles.dataBody}>{demoSession ? 'Usa reglas deterministas y nada saldrá de este dispositivo.' : 'La app pedirá al servidor únicamente la información indicada.'}</Text></View></View>
       <DataLine icon="calendar-range" title={`${recentEvents.length} ${recentEvents.length === 1 ? 'registro reciente' : 'registros recientes'}`} body="Periodo fijo de 14 días, máximo 120 registros." />
       <DataLine icon="file-check-outline" title={`${confirmedFacts.length} ${confirmedFacts.length === 1 ? 'dato documental confirmado' : 'datos documentales confirmados'}`} body="Nunca se envían los PDFs, imágenes ni propuestas pendientes." />
       <DataLine icon="account-lock-outline" title={`Solo el perfil ${profile.name}`} body="No se incluyen nombres de cuidadores ni otros perfiles." />
@@ -89,11 +89,11 @@ export default function AssistantScreen() {
     {message ? <View style={styles.error}><MaterialCommunityIcons name="alert-circle-outline" size={18} color="#8D4747" /><Text style={styles.errorText}>{message}</Text></View> : null}
     <Pressable accessibilityRole="button" disabled={busy || !requestApproved} onPress={() => void generate()} style={[styles.generate, (busy || !requestApproved) && styles.disabled]}>
       {busy ? <ActivityIndicator color="#FFF" /> : <MaterialCommunityIcons name={demoSession ? 'calculator-variant-outline' : 'creation-outline'} size={20} color="#FFF" />}
-      <Text style={styles.generateText}>{busy ? 'Organizando registros…' : demoSession ? 'Preparar vista local' : 'Generar resumen protegido'}</Text>
+      <Text style={styles.generateText}>{busy ? 'Organizando registros…' : demoSession ? 'Preparar análisis local' : 'Generar resumen protegido'}</Text>
     </Pressable>
 
     {result ? <View style={styles.result}>
-      <View style={styles.resultHead}><View><Text style={styles.resultOverline}>{result.demo ? 'CÁLCULO LOCAL · DEMOSTRACIÓN' : 'INTERPRETACIÓN DE IA'}</Text><Text style={styles.resultTitle}>Resumen para {profile.name}</Text></View><MaterialCommunityIcons name={result.demo ? 'calculator-variant-outline' : 'creation-outline'} size={23} color={colors.sageDark} /></View>
+      <View style={styles.resultHead}><View><Text style={styles.resultOverline}>{result.demo ? 'CÁLCULO LOCAL · SIN IA EXTERNA' : 'INTERPRETACIÓN DE IA'}</Text><Text style={styles.resultTitle}>Resumen para {profile.name}</Text></View><MaterialCommunityIcons name={result.demo ? 'calculator-variant-outline' : 'creation-outline'} size={23} color={colors.sageDark} /></View>
       <Text style={styles.resultSummary}>{result.summary}</Text>
       {result.observations.length ? <ResultSection title="LO QUE ORGANIZÓ" items={result.observations.map((item) => `${item.title}. ${item.statement}${item.evidenceIds.length ? ` · ${item.evidenceIds.length} ${item.evidenceIds.length === 1 ? 'referencia' : 'referencias'}` : ''}`)} /> : null}
       {result.missingData.length ? <ResultSection title="DATOS QUE FALTAN" items={result.missingData} /> : null}

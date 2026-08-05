@@ -10,7 +10,7 @@ import { DOCUMENT_ANALYSIS_POLICY_VERSION, grantDocumentAnalysisConsent } from '
 import { FAMILY_INSIGHTS_POLICY_VERSION, grantAiAssistantConsent } from '@/lib/aiAssistant';
 import { detectSyncConflicts, detectWorkspaceChanges } from '@/lib/syncConflicts';
 
-const DEMO_KEY = 'emilia-demo-session-v1';
+const LOCAL_KEY = 'emilia-demo-session-v1';
 
 type AuthResult = { ok: boolean; message?: string; needsEmailConfirmation?: boolean; nextPath?: string };
 type SyncStatus = 'local' | 'loading' | 'synced' | 'error' | 'conflict';
@@ -29,7 +29,7 @@ type AuthContextValue = {
   signUp: (name: string, email: string, password: string) => Promise<AuthResult>;
   sendPasswordReset: (email: string) => Promise<AuthResult>;
   updatePassword: (password: string) => Promise<AuthResult>;
-  enterDemo: () => Promise<void>;
+  enterLocal: () => Promise<void>;
   acceptEssentialConsent: () => Promise<AuthResult>;
   syncNow: () => Promise<AuthResult>;
   refreshWorkspace: () => Promise<AuthResult>;
@@ -94,7 +94,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let mounted = true;
     Promise.all([
-      AsyncStorage.getItem(DEMO_KEY),
+      AsyncStorage.getItem(LOCAL_KEY),
       supabase?.auth.getSession() ?? Promise.resolve({ data: { session: null } })
     ]).then(async ([demo, result]) => {
       if (!mounted) return;
@@ -102,7 +102,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const sessionUser = result.data.session?.user ?? null;
       setUser(sessionUser);
       if (sessionUser) await activateUserWorkspace(sessionUser);
-      else if (demo === 'active') useAppStore.getState().prepareWorkspace('demo');
+      else if (demo === 'active') useAppStore.getState().prepareWorkspace('local');
       setLoading(false);
     });
     const subscription = supabase?.auth.onAuthStateChange((_event, session) => {
@@ -205,10 +205,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
     user, loading, demoSession, isAuthenticated: Boolean(user || demoSession), backendAvailable: !backendIsDemo,
     familyId, familyName, syncStatus, pendingChanges: pendingSync?.changeCount ?? 0, conflictCount,
     signIn: async (email, password) => {
-      if (!supabase) return { ok: false, message: 'La conexión segura aún no está configurada. Puedes explorar la demostración.' };
+      if (!supabase) return { ok: false, message: 'La conexión segura aún no está configurada. Puedes usar Emi gratis en este dispositivo.' };
       const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
       if (error || !data.user) return { ok: false, message: friendlyError(error?.message || 'invalid login') };
-      await AsyncStorage.removeItem(DEMO_KEY); setDemoSession(false);
+      await AsyncStorage.removeItem(LOCAL_KEY); setDemoSession(false);
       const workspace = await activateUserWorkspace(data.user);
       const invitationToken = await pendingInvitation();
       if (invitationToken) return { ok: true, nextPath: `/invite?token=${encodeURIComponent(invitationToken)}` };
@@ -218,7 +218,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (!supabase) return { ok: false, message: 'La creación de cuentas estará disponible al conectar el servidor seguro.' };
       const { data, error } = await supabase.auth.signUp({ email: email.trim().toLowerCase(), password, options: { data: { display_name: name.trim() } } });
       if (error) return { ok: false, message: friendlyError(error.message) };
-      await AsyncStorage.removeItem(DEMO_KEY); setDemoSession(false);
+      await AsyncStorage.removeItem(LOCAL_KEY); setDemoSession(false);
       return { ok: true, needsEmailConfirmation: !data.session };
     },
     sendPasswordReset: async (email) => {
@@ -231,7 +231,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const { error } = await supabase.auth.updateUser({ password });
       return error ? { ok: false, message: friendlyError(error.message) } : { ok: true };
     },
-    enterDemo: async () => { await supabase?.auth.signOut(); await AsyncStorage.setItem(DEMO_KEY, 'active'); useAppStore.getState().prepareWorkspace('demo'); setUser(null); setFamilyId(undefined); setFamilyName(undefined); setDemoSession(true); setSyncStatus('local'); },
+    enterLocal: async () => { await supabase?.auth.signOut(); await AsyncStorage.setItem(LOCAL_KEY, 'active'); useAppStore.getState().prepareWorkspace('local'); setUser(null); setFamilyId(undefined); setFamilyName(undefined); setDemoSession(true); setSyncStatus('local'); },
     acceptEssentialConsent: async () => {
       if (!supabase || demoSession) return { ok: true };
       const displayName = user?.user_metadata?.display_name || 'Mi familia';
@@ -263,7 +263,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const workspace = await activateUserWorkspace(user);
       return workspace.familyId ? { ok: true } : { ok: false, message: 'No pudimos abrir el espacio familiar.' };
     },
-    signOut: async () => { await supabase?.auth.signOut(); await AsyncStorage.removeItem(DEMO_KEY); setDemoSession(false); setUser(null); setFamilyId(undefined); setFamilyName(undefined); setSyncStatus(backendIsDemo ? 'local' : 'loading'); }
+    signOut: async () => { await supabase?.auth.signOut(); await AsyncStorage.removeItem(LOCAL_KEY); setDemoSession(false); setUser(null); setFamilyId(undefined); setFamilyName(undefined); setSyncStatus(backendIsDemo ? 'local' : 'loading'); }
   }), [conflictCount, demoSession, familyId, familyName, loading, pendingSync?.changeCount, runQueuedSync, syncStatus, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

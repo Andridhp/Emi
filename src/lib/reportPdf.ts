@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import type { BirthRecord, EventKind, FamilyEvent, PostpartumRecord, PrenatalRecord, SourceKind } from '@/types/domain';
-import type { ConsultationReportData, ReportSection } from '@/lib/report';
+import { briefConsultationEvents, type ConsultationReportData, type ReportSection } from '@/lib/report';
 
 const PAGE_WIDTH = 210;
 const PAGE_HEIGHT = 297;
@@ -106,7 +106,8 @@ export function buildConsultationPdf(report: ConsultationReportData): Uint8Array
     if (!events.length) { paragraph('No hay registros en este periodo.', { color: MUTED }); return; }
     for (const event of events) {
       const structured = event.data ? Object.entries(event.data).map(([key, value]) => `${eventDataLabels[key] ?? key}: ${cleanText(value)}`).join(' | ') : '';
-      const detail = structured || cleanText(event.detail) || 'Sin detalle adicional';
+      const rawDetail = structured || cleanText(event.detail) || 'Sin detalle adicional';
+      const detail = report.format === 'brief' && rawDetail.length > 180 ? `${rawDetail.slice(0, 177)}...` : rawDetail;
       const date = new Date(event.occurredAt).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
       const titleLines = doc.splitTextToSize(cleanText(event.title), 91) as string[];
       const detailLines = doc.splitTextToSize(detail, 101) as string[];
@@ -136,7 +137,7 @@ export function buildConsultationPdf(report: ConsultationReportData): Uint8Array
 
   doc.setFillColor(...MINT); doc.roundedRect(MARGIN, y - 5, 18, 18, 6, 6, 'F');
   doc.setTextColor(...SAGE); doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.text('Emi', MARGIN + 9, y + 6.5, { align: 'center' });
-  doc.setTextColor(...INK); doc.setFontSize(21); doc.text('Resumen para consulta', MARGIN + 24, y + 1);
+  doc.setTextColor(...INK); doc.setFontSize(21); doc.text(report.format === 'brief' ? 'Resumen breve' : 'Resumen para consulta', MARGIN + 24, y + 1);
   doc.setTextColor(...MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
   doc.text(`${cleanText(report.profileName)} | ${report.type === 'routine' ? 'Control rutinario' : 'Consulta por enfermedad'}`, MARGIN + 24, y + 7);
   doc.text(`${cleanText(report.periodTitle)} | ${cleanText(report.dateRange)}`, MARGIN + 24, y + 12);
@@ -149,7 +150,8 @@ export function buildConsultationPdf(report: ConsultationReportData): Uint8Array
   doc.text(notice, MARGIN + 5, y + 11, { lineHeightFactor: 1.25 }); y += 25;
 
   if (report.reason) {
-    const reasonLines = doc.splitTextToSize(cleanText(report.reason), CONTENT_WIDTH - 10) as string[];
+    const reasonText = report.format === 'brief' && report.reason.length > 240 ? `${report.reason.slice(0, 237)}...` : report.reason;
+    const reasonLines = doc.splitTextToSize(cleanText(reasonText), CONTENT_WIDTH - 10) as string[];
     const reasonHeight = Math.max(17, 12 + reasonLines.length * 4.2);
     ensure(reasonHeight + 5);
     doc.setFillColor(...PEACH); doc.roundedRect(MARGIN, y, CONTENT_WIDTH, reasonHeight, 4, 4, 'F');
@@ -172,8 +174,31 @@ export function buildConsultationPdf(report: ConsultationReportData): Uint8Array
   });
   y += 23;
 
+  const addDocuments = (items = report.documents) => {
+    section('Documentos del periodo');
+    paragraph('Emi sólo incorpora como datos los campos confirmados por la familia. Los demás archivos aparecen como guardados sin análisis confirmado.', { color: MUTED, size: 7.5 });
+    if (!items.length) paragraph('No hay documentos guardados en este periodo.', { color: MUTED });
+    for (const item of items) {
+      labelValue(
+        `${item.occurredAt ? new Date(item.occurredAt).toLocaleDateString('es-MX') : item.date} · ${item.category}`,
+        item.status === 'reviewed' && item.extracted.length ? `${item.name} — ${item.extracted.join(' · ').slice(0, report.format === 'brief' ? 180 : undefined)}` : `${item.name} — Sin datos confirmados`,
+        item.status === 'reviewed' ? 'Confirmado por la familia' : 'Guardado sin análisis'
+      );
+    }
+  };
+  if (report.format === 'brief') {
+    section('Registros representativos para comentar'); paragraph('Selección por categorías; no es una clasificación de gravedad.', { color: MUTED, size: 7 }); eventList(briefConsultationEvents(report.events, 3));
+    if (report.sections.has('documents')) addDocuments(report.documents.slice(0, 1));
+    if (report.sections.has('questions')) {
+      section('Preguntas prioritarias');
+      report.questions.slice(0, 2).forEach((question, index) => paragraph(`${index + 1}. ${question}`, { indent: 2, gap: 2 }));
+    }
+  } else {
   for (const group of eventGroups) if (report.sections.has(group.section)) {
     section(group.title); eventList(report.events.filter((event) => group.kinds.includes(event.kind)));
+  }
+  if (report.sections.has('documents')) {
+    addDocuments();
   }
   if (report.sections.has('prenatal')) {
     section('Expediente prenatal actual'); paragraph('Esta sección puede incluir información anterior al periodo seleccionado.', { color: MUTED, size: 7.5 });
@@ -190,9 +215,10 @@ export function buildConsultationPdf(report: ConsultationReportData): Uint8Array
     section('Preguntas para el profesional');
     report.questions.forEach((question, index) => paragraph(`${index + 1}. ${question}`, { indent: 2, gap: 2 }));
   }
+  }
 
   ensure(24); y += 5; doc.setDrawColor(...LINE); doc.line(MARGIN, y, PAGE_WIDTH - MARGIN, y); y += 7;
-  paragraph(`Generado por Emi con ${report.events.length} registros del perfil seleccionado. Cada bebé y embarazo es distinto. Revisa el contenido antes de compartirlo.`, { color: MUTED, size: 7.5 });
+  paragraph(`Generado por Emi con ${report.events.length} registros y ${report.documents.length} documentos del perfil seleccionado. Cada bebé y embarazo es distinto. Revisa el contenido antes de compartirlo.`, { color: MUTED, size: 7.5 });
 
   const pages = doc.getNumberOfPages();
   for (let page = 1; page <= pages; page += 1) {

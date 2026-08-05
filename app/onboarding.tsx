@@ -15,17 +15,14 @@ export default function OnboardingScreen() {
   const compact = width < 680;
   const [step, setStep] = useState(0);
   const [journey, setJourney] = useState<Journey>('baby');
-  const [childName, setChildName] = useState('Emilia');
+  const [childName, setChildName] = useState('');
   const [caregiverName, setCaregiverName] = useState('');
-  const { demoSession, syncNow } = useAuth();
-  const { completeOnboarding, addProfile, profiles } = useAppStore();
+  const { syncNow } = useAuth();
+  const { completeOnboarding, addProfile } = useAppStore();
   const next = () => setStep((current) => Math.min(3, current + 1));
   const back = () => step === 0 ? router.back() : setStep((current) => current - 1);
   const finish = async () => {
-    const defaultId = journey === 'pregnancy' ? 'pregnancy' : 'emilia';
-    const profileId = demoSession && profiles.some((profile) => profile.id === defaultId)
-      ? defaultId
-      : addProfile({ name: childName.trim(), stage: journey === 'pregnancy' ? 'pregnancy' : 'child' });
+    const profileId = addProfile({ name: childName.trim(), stage: journey === 'pregnancy' ? 'pregnancy' : 'child' });
     completeOnboarding(profileId, childName, caregiverName);
     await syncNow();
     router.replace('/home');

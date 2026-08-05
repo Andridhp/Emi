@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { assessReportReadiness, buildConsultationReport, createConsultationReport } from '../src/lib/report';
+import { assessReportReadiness, briefConsultationEvents, buildConsultationReport, buildConsultationText, createConsultationReport } from '../src/lib/report';
 import { initialEvents } from '../src/data/demo';
 import { confirmedDocumentEvents } from '../src/lib/documents';
 import { documents } from '../src/data/demo';
@@ -43,9 +43,53 @@ describe('Resumen para consulta', () => {
 
   it('incluye documentos confirmados con trazabilidad documental', () => {
     const merged = [...initialEvents, ...confirmedDocumentEvents(documents)];
-    const html = buildConsultationReport(merged, { type: 'routine', profileId: 'pregnancy', profileName: 'Embarazo', period: 'since-consultation', sections: ['growth', 'timeline'], referenceDate: new Date('2026-07-18T12:00:00') });
+    const html = buildConsultationReport(merged, { type: 'routine', profileId: 'pregnancy', profileName: 'Embarazo', period: 'since-consultation', lastConsultationDate: '2026-07-01', sections: ['growth', 'timeline'], referenceDate: new Date('2026-07-18T12:00:00') });
     expect(html).toContain('Ultrasonido estructural.pdf');
     expect(html).toContain('Documento');
+    expect(html).not.toContain('Cartilla de vacunación.pdf');
+  });
+
+  it('usa la fecha real de la última consulta y no inventa el periodo cuando falta', () => {
+    const withDate = createConsultationReport(initialEvents, { type: 'routine', profileId: 'emilia', profileName: 'Emilia', period: 'since-consultation', lastConsultationDate: '2026-07-14', sections: ['timeline'], referenceDate: new Date('2026-07-16T12:00:00') });
+    const withoutDate = createConsultationReport(initialEvents, { type: 'routine', profileId: 'emilia', profileName: 'Emilia', period: 'since-consultation', sections: ['timeline'], referenceDate: new Date('2026-07-16T12:00:00') });
+    expect(withDate.periodTitle).toBe('Desde la última consulta');
+    expect(withDate.periodStart).toBe('2026-07-14');
+    expect(withoutDate.periodTitle).toBe('Últimos 7 días');
+  });
+
+  it('genera un resumen breve con contenido limitado para lectura rápida', () => {
+    const options = { type: 'routine' as const, format: 'brief' as const, profileId: 'emilia', profileName: 'Emilia', period: '7d' as const, sections: ['documents', 'questions'] as const, referenceDate: new Date('2026-07-16T12:00:00'), documents, customQuestions: ['Pregunta prioritaria'] };
+    const html = buildConsultationReport(initialEvents, options);
+    const pdf = new TextDecoder('latin1').decode(buildConsultationPdf(createConsultationReport(initialEvents, options)));
+    expect(html).toContain('Resumen breve para consulta');
+    expect(html).toContain('Registros representativos para comentar');
+    expect(html).toContain('Preguntas prioritarias');
+    expect(html).not.toContain('<h2>Línea de tiempo</h2>');
+    expect(pdf.match(/\/Type \/Page\b/g)).toHaveLength(1);
+  });
+
+  it('representa categorías distintas sin interpretar gravedad', () => {
+    const selected = briefConsultationEvents(initialEvents, 5);
+    expect(new Set(selected.map((event) => event.kind))).toEqual(new Set(['temperature', 'feeding', 'diaper', 'sleep']));
+  });
+
+  it('puede ocultar el nombre y producir texto sin enviar información', () => {
+    const report = createConsultationReport(initialEvents, { type: 'routine', format: 'brief', shareProfileName: false, profileId: 'emilia', profileName: 'Emilia', period: '7d', sections: ['questions'], referenceDate: new Date('2026-07-16T12:00:00') });
+    const text = buildConsultationText(report);
+    expect(report.profileName).toBe('Perfil sin nombre');
+    expect(text).toContain('Perfil sin nombre');
+    expect(text).not.toContain('Emilia');
+    expect(text).toContain('No es diagnóstico');
+  });
+
+  it('incluye documentos guardados y datos confirmados en una sección propia', () => {
+    const options = { type: 'routine' as const, profileId: 'pregnancy', profileName: 'Embarazo', period: '30d' as const, sections: ['documents'] as const, referenceDate: new Date('2026-07-18T12:00:00'), documents };
+    const data = createConsultationReport([], options);
+    const html = buildConsultationReport([], options);
+    expect(data.documents).toHaveLength(2);
+    expect(html).toContain('Documentos del periodo');
+    expect(html).toContain('Peso fetal estimado: 510 g');
+    expect(html).toContain('Guardado sin análisis confirmado');
     expect(html).not.toContain('Cartilla de vacunación.pdf');
   });
 

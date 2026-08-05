@@ -21,7 +21,7 @@ export function ProfileHeader({ eyebrow }: { eyebrow?: string }) {
             <Text style={styles.name}>{profile ? profileNames[profile.id] || profile.name : 'Configurar perfil'}</Text>
             <MaterialCommunityIcons name="chevron-down" size={18} color={colors.ink} />
           </View>
-          <Text style={styles.sub}>{profile ? profileAgeLabel(profile) : 'Agrega un embarazo o hijo'}{!demoSession && profile ? ` · ${syncStatus === 'conflict' ? `Revisar ${conflictCount} ${conflictCount === 1 ? 'conflicto' : 'conflictos'}` : syncStatus === 'loading' ? `Guardando${pendingChanges ? ` ${pendingChanges}` : ''}…` : syncStatus === 'error' ? `${pendingChanges || ''} ${pendingChanges === 1 ? 'cambio pendiente' : 'cambios pendientes'}`.trim() : 'Protegido en la nube'}` : ''}</Text>
+          <Text style={styles.sub}>{profile ? profileAgeLabel(profile) : 'Agrega un embarazo o hijo'}{demoSession && profile ? ' · Guardado localmente' : !demoSession && profile ? ` · ${syncStatus === 'conflict' ? `Revisar ${conflictCount} ${conflictCount === 1 ? 'conflicto' : 'conflictos'}` : syncStatus === 'loading' ? `Guardando${pendingChanges ? ` ${pendingChanges}` : ''}…` : syncStatus === 'error' ? `${pendingChanges || ''} ${pendingChanges === 1 ? 'cambio pendiente' : 'cambios pendientes'}`.trim() : 'Protegido en la nube'}` : ''}</Text>
         </View>
       </Pressable>
       <Pressable accessibilityRole="link" accessibilityLabel="Abrir avisos" onPress={() => router.push('/notifications')} style={styles.bell}><MaterialCommunityIcons name="bell-outline" size={23} color={colors.ink} /><View style={styles.dot} /></Pressable>

@@ -39,6 +39,30 @@ describe('aislamiento del espacio familiar', () => {
     expect(useAppStore.getState().events.length).toBeGreaterThan(0);
   });
 
+  it('inicia el modo local como un espacio real vacío', () => {
+    useAppStore.getState().prepareWorkspace('user:before-local', 'Ana');
+    useAppStore.getState().prepareWorkspace('local');
+    const state = useAppStore.getState();
+    expect(state.workspaceIdentity).toBe('local');
+    expect(state.profiles).toEqual([]);
+    expect(state.events).toEqual([]);
+    expect(state.documents).toEqual([]);
+    expect(state.hasCompletedOnboarding).toBe(false);
+  });
+
+  it('borra realmente un espacio local sin dejar permisos o metadatos', () => {
+    useAppStore.getState().prepareWorkspace('user:before-clear', 'Ana');
+    useAppStore.getState().prepareWorkspace('local');
+    useAppStore.getState().addProfile({ name: 'Bebé local', stage: 'child' });
+    useAppStore.getState().addQuickEvent('sleep', 'Sueño', '45 min');
+    useAppStore.getState().setConsentPreference('voice', true);
+    useAppStore.getState().clearLocalWorkspace();
+    const state = useAppStore.getState();
+    expect(state.profiles).toEqual([]);
+    expect(state.events).toEqual([]);
+    expect(state.consentPreferences.voice).toBe(false);
+  });
+
   it('conserva una eliminación de pregunta al hidratar desde la nube', () => {
     useAppStore.getState().prepareWorkspace('user:cuenta-a', 'Ana');
     const profileId = useAppStore.getState().addProfile({ name: 'Bebé A', stage: 'child' });
@@ -112,5 +136,25 @@ describe('aislamiento del espacio familiar', () => {
     expect(useAppStore.getState().events.find((event) => event.id === eventId)?.title).toBe('Sueño de nube');
     expect(useAppStore.getState().pendingSync).toBeUndefined();
     expect(useAppStore.getState().syncConflicts).toEqual([]);
+  });
+
+  it('restaura una copia local sin reactivar permisos opcionales ni vínculos privados', () => {
+    useAppStore.getState().prepareWorkspace('user:restore-test', 'Ana');
+    useAppStore.getState().restoreLocalBackup({
+      format: 'emilia-family-export', schemaVersion: '1.1', exportedAt: '2026-08-04T10:00:00.000Z', notice: '',
+      profiles: [{ id: 'baby', name: 'Bebé', stage: 'child', avatar: 'B', createdAt: '2026-01-01' }],
+      caregivers: [], prenatalRecords: [], birthRecords: [], postpartumRecords: [],
+      events: [{ id: 'event', profileId: 'baby', kind: 'sleep', title: 'Sueño', detail: '45 min', occurredAt: '2026-08-03T10:00:00.000Z', source: 'parent' }],
+      documents: [{ id: 'doc', profileId: 'baby', name: 'Informe.pdf', category: 'Pediatría', date: '3 ago 2026', status: 'pending', extracted: [] }],
+      consultationQuestions: [], activeProfileId: 'baby',
+      consentPreferences: { localStorage: true, documentAnalysis: true, aiAssistant: true, voice: true, productAnalytics: true }
+    });
+    const state = useAppStore.getState();
+    expect(state.activeProfileId).toBe('baby');
+    expect(state.events).toHaveLength(1);
+    expect(state.documents[0].localOnly).toBe(true);
+    expect('cloudId' in state.documents[0]).toBe(false);
+    expect('storagePath' in state.documents[0]).toBe(false);
+    expect(state.consentPreferences).toEqual({ localStorage: true, documentAnalysis: false, aiAssistant: false, voice: false, productAnalytics: false });
   });
 });
