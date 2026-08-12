@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { User } from '@supabase/supabase-js';
+import type { Href } from 'expo-router';
 import { PropsWithChildren, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { isDemoMode as backendIsDemo, supabase } from '@/lib/supabase';
@@ -12,7 +13,7 @@ import { detectSyncConflicts, detectWorkspaceChanges } from '@/lib/syncConflicts
 
 const LOCAL_KEY = 'emilia-demo-session-v1';
 
-type AuthResult = { ok: boolean; message?: string; needsEmailConfirmation?: boolean; nextPath?: string };
+type AuthResult = { ok: boolean; message?: string; needsEmailConfirmation?: boolean; nextPath?: Href };
 type SyncStatus = 'local' | 'loading' | 'synced' | 'error' | 'conflict';
 type AuthContextValue = {
   user: User | null;
