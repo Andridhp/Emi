@@ -78,7 +78,7 @@ export function createDemoAssistantResult(input: {
     evidenceIds: [card.id]
   }));
   return {
-    summary: `${purposeIntro[input.purpose]} Esta demostración usa cálculos deterministas en el dispositivo y no envía información a un proveedor externo.`,
+    summary: `${purposeIntro[input.purpose]} Este análisis local usa cálculos deterministas en el dispositivo y no envía información a un proveedor externo.`,
     observations,
     missingData: cards.filter((card) => card.state === 'learning').slice(0, 4).map((card) => card.evidence),
     suggestedQuestions: selected.slice(0, 4).map((card) => `¿Conviene revisar con más detalle: ${card.title.toLowerCase()}?`),

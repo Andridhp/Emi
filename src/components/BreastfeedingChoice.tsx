@@ -1,4 +1,4 @@
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@/components/MaterialCommunityIcons';
 import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, shadowLifted, webDepth } from '@/theme';
 

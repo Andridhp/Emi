@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createPortableFamilyExport, serializePortableFamilyExport } from '../src/lib/dataExport';
+import { createPortableFamilyExport, parsePortableFamilyExport, serializePortableFamilyExport } from '../src/lib/dataExport';
 
 describe('Copia portable de datos', () => {
   const input = {
@@ -13,8 +13,24 @@ describe('Copia portable de datos', () => {
   it('incluye versión y fecha para futuras importaciones', () => {
     const data = createPortableFamilyExport(input);
     expect(data.format).toBe('emilia-family-export');
-    expect(data.schemaVersion).toBe('1.0');
+    expect(data.schemaVersion).toBe('1.1');
     expect(data.exportedAt).toBe('2026-07-24T12:00:00.000Z');
+  });
+
+  it('valida un respaldo antes de restaurarlo y acepta copias anteriores', () => {
+    const current = createPortableFamilyExport(input);
+    expect(parsePortableFamilyExport(serializePortableFamilyExport(current)).profiles).toHaveLength(input.profiles.length);
+    const legacy = { ...current, schemaVersion: '1.0', consultationQuestions: undefined };
+    expect(parsePortableFamilyExport(JSON.stringify(legacy)).consultationQuestions).toEqual([]);
+    expect(() => parsePortableFamilyExport('{"format":"otro"}')).toThrow('respaldo compatible');
+  });
+
+  it('no exporta rutas ni identificadores privados de documentos', () => {
+    const data = createPortableFamilyExport({ ...input, documents: [{ ...input.documents[0], uri: 'file:///private.pdf', cloudId: 'secret', storagePath: 'family/private.pdf', processingJobId: 'job' }] });
+    const text = serializePortableFamilyExport(data);
+    expect(text).not.toContain('file:///private.pdf');
+    expect(text).not.toContain('family/private.pdf');
+    expect(text).not.toContain('"cloudId"');
   });
 
   it('excluye rutas privadas y archivos binarios del dispositivo', () => {

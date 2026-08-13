@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { User } from '@supabase/supabase-js';
+import type { Href } from 'expo-router';
 import { PropsWithChildren, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { isDemoMode as backendIsDemo, supabase } from '@/lib/supabase';
@@ -10,9 +11,9 @@ import { DOCUMENT_ANALYSIS_POLICY_VERSION, grantDocumentAnalysisConsent } from '
 import { FAMILY_INSIGHTS_POLICY_VERSION, grantAiAssistantConsent } from '@/lib/aiAssistant';
 import { detectSyncConflicts, detectWorkspaceChanges } from '@/lib/syncConflicts';
 
-const DEMO_KEY = 'emilia-demo-session-v1';
+const LOCAL_KEY = 'emilia-demo-session-v1';
 
-type AuthResult = { ok: boolean; message?: string; needsEmailConfirmation?: boolean; nextPath?: string };
+type AuthResult = { ok: boolean; message?: string; needsEmailConfirmation?: boolean; nextPath?: Href };
 type SyncStatus = 'local' | 'loading' | 'synced' | 'error' | 'conflict';
 type AuthContextValue = {
   user: User | null;
@@ -29,7 +30,7 @@ type AuthContextValue = {
   signUp: (name: string, email: string, password: string) => Promise<AuthResult>;
   sendPasswordReset: (email: string) => Promise<AuthResult>;
   updatePassword: (password: string) => Promise<AuthResult>;
-  enterDemo: () => Promise<void>;
+  enterLocal: () => Promise<void>;
   acceptEssentialConsent: () => Promise<AuthResult>;
   syncNow: () => Promise<AuthResult>;
   refreshWorkspace: () => Promise<AuthResult>;
@@ -67,6 +68,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const hydratingRef = useRef(false);
   const internalSyncStateRef = useRef(false);
   const syncInFlightRef = useRef<Promise<boolean> | null>(null);
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const remoteRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activateUserWorkspace = async (nextUser: User) => {
     useAppStore.getState().prepareWorkspace(`user:${nextUser.id}`, nextUser.user_metadata?.display_name || 'Mi cuenta');
@@ -91,10 +94,26 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   };
 
+  const refreshRemoteWorkspace = useCallback(async () => {
+    if (!user || !familyId || demoSession || !supabase) return;
+    if (refreshInFlightRef.current) return refreshInFlightRef.current;
+    const operation = (async () => {
+      try {
+        await activateUserWorkspace(user);
+      } catch {
+        setSyncStatus('error');
+      }
+    })().finally(() => {
+      refreshInFlightRef.current = null;
+    });
+    refreshInFlightRef.current = operation;
+    return operation;
+  }, [demoSession, familyId, user]);
+
   useEffect(() => {
     let mounted = true;
     Promise.all([
-      AsyncStorage.getItem(DEMO_KEY),
+      AsyncStorage.getItem(LOCAL_KEY),
       supabase?.auth.getSession() ?? Promise.resolve({ data: { session: null } })
     ]).then(async ([demo, result]) => {
       if (!mounted) return;
@@ -102,7 +121,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const sessionUser = result.data.session?.user ?? null;
       setUser(sessionUser);
       if (sessionUser) await activateUserWorkspace(sessionUser);
-      else if (demo === 'active') useAppStore.getState().prepareWorkspace('demo');
+      else if (demo === 'active') useAppStore.getState().prepareWorkspace('local');
       setLoading(false);
     });
     const subscription = supabase?.auth.onAuthStateChange((_event, session) => {
@@ -167,6 +186,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!user || !familyId || demoSession) return;
+    const queueRemoteRefresh = () => {
+      if (remoteRefreshTimerRef.current) clearTimeout(remoteRefreshTimerRef.current);
+      remoteRefreshTimerRef.current = setTimeout(() => {
+        void refreshRemoteWorkspace();
+      }, 900);
+    };
+    const channel = supabase?.channel(`family-audit-${familyId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_log', filter: `family_id=eq.${familyId}` }, () => {
+        if (!hydratingRef.current) queueRemoteRefresh();
+      })
+      .subscribe();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = useAppStore.subscribe((state, previous) => {
       if (hydratingRef.current || internalSyncStateRef.current || state.syncConflicts !== previous.syncConflicts) return;
@@ -185,40 +215,52 @@ export function AuthProvider({ children }: PropsWithChildren) {
     });
     const retryInterval = setInterval(() => {
       if (useAppStore.getState().pendingSync) void runQueuedSync();
+      else queueRemoteRefresh();
     }, 20000);
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active' && useAppStore.getState().pendingSync) void runQueuedSync();
+      if (nextState === 'active') {
+        if (useAppStore.getState().pendingSync) void runQueuedSync();
+        else queueRemoteRefresh();
+      }
     });
-    const handleOnline = () => { if (useAppStore.getState().pendingSync) void runQueuedSync(); };
+    const handleOnline = () => {
+      if (useAppStore.getState().pendingSync) void runQueuedSync();
+      else queueRemoteRefresh();
+    };
     if (typeof window !== 'undefined') window.addEventListener('online', handleOnline);
     if (useAppStore.getState().pendingSync) timer = setTimeout(() => { void runQueuedSync(); }, 250);
+    else queueRemoteRefresh();
     return () => {
       if (timer) clearTimeout(timer);
+      if (remoteRefreshTimerRef.current) clearTimeout(remoteRefreshTimerRef.current);
       clearInterval(retryInterval);
       appStateSubscription.remove();
       if (typeof window !== 'undefined') window.removeEventListener('online', handleOnline);
+      void channel?.unsubscribe();
       unsubscribe();
     };
-  }, [demoSession, familyId, runQueuedSync, user]);
+  }, [demoSession, familyId, refreshRemoteWorkspace, runQueuedSync, user]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user, loading, demoSession, isAuthenticated: Boolean(user || demoSession), backendAvailable: !backendIsDemo,
     familyId, familyName, syncStatus, pendingChanges: pendingSync?.changeCount ?? 0, conflictCount,
     signIn: async (email, password) => {
-      if (!supabase) return { ok: false, message: 'La conexión segura aún no está configurada. Puedes explorar la demostración.' };
+      if (!supabase) return { ok: false, message: 'La conexión segura aún no está configurada. Puedes usar Emi gratis en este dispositivo.' };
       const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
       if (error || !data.user) return { ok: false, message: friendlyError(error?.message || 'invalid login') };
-      await AsyncStorage.removeItem(DEMO_KEY); setDemoSession(false);
+      await AsyncStorage.removeItem(LOCAL_KEY); setDemoSession(false);
       const workspace = await activateUserWorkspace(data.user);
       const invitationToken = await pendingInvitation();
       if (invitationToken) return { ok: true, nextPath: `/invite?token=${encodeURIComponent(invitationToken)}` };
-      return { ok: true, nextPath: !workspace.familyId ? '/consent' : workspace.profiles.length ? '/home' : '/onboarding' };
+      const resumePath = useAppStore.getState().lastVisitedPath;
+      const canResume = Boolean(resumePath && resumePath !== '/' && !resumePath.startsWith('/auth/') && resumePath !== '/consent' && resumePath !== '/onboarding');
+      return { ok: true, nextPath: !workspace.familyId ? '/consent' : workspace.profiles.length ? (canResume ? (resumePath as Href) : '/home') : '/onboarding' };
     },
     signUp: async (name, email, password) => {
       if (!supabase) return { ok: false, message: 'La creación de cuentas estará disponible al conectar el servidor seguro.' };
       const { data, error } = await supabase.auth.signUp({ email: email.trim().toLowerCase(), password, options: { data: { display_name: name.trim() } } });
       if (error) return { ok: false, message: friendlyError(error.message) };
-      await AsyncStorage.removeItem(DEMO_KEY); setDemoSession(false);
+      await AsyncStorage.removeItem(LOCAL_KEY); setDemoSession(false);
       return { ok: true, needsEmailConfirmation: !data.session };
     },
     sendPasswordReset: async (email) => {
@@ -231,7 +273,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const { error } = await supabase.auth.updateUser({ password });
       return error ? { ok: false, message: friendlyError(error.message) } : { ok: true };
     },
-    enterDemo: async () => { await supabase?.auth.signOut(); await AsyncStorage.setItem(DEMO_KEY, 'active'); useAppStore.getState().prepareWorkspace('demo'); setUser(null); setFamilyId(undefined); setFamilyName(undefined); setDemoSession(true); setSyncStatus('local'); },
+    enterLocal: async () => { await supabase?.auth.signOut(); await AsyncStorage.setItem(LOCAL_KEY, 'active'); useAppStore.getState().prepareWorkspace('local'); setUser(null); setFamilyId(undefined); setFamilyName(undefined); setDemoSession(true); setSyncStatus('local'); },
     acceptEssentialConsent: async () => {
       if (!supabase || demoSession) return { ok: true };
       const displayName = user?.user_metadata?.display_name || 'Mi familia';
@@ -263,7 +305,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const workspace = await activateUserWorkspace(user);
       return workspace.familyId ? { ok: true } : { ok: false, message: 'No pudimos abrir el espacio familiar.' };
     },
-    signOut: async () => { await supabase?.auth.signOut(); await AsyncStorage.removeItem(DEMO_KEY); setDemoSession(false); setUser(null); setFamilyId(undefined); setFamilyName(undefined); setSyncStatus(backendIsDemo ? 'local' : 'loading'); }
+    signOut: async () => { await supabase?.auth.signOut(); await AsyncStorage.removeItem(LOCAL_KEY); setDemoSession(false); setUser(null); setFamilyId(undefined); setFamilyName(undefined); setSyncStatus(backendIsDemo ? 'local' : 'loading'); }
   }), [conflictCount, demoSession, familyId, familyName, loading, pendingSync?.changeCount, runQueuedSync, syncStatus, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

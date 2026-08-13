@@ -5,18 +5,23 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BottomNav } from './BottomNav';
 import { Sidebar } from './Sidebar';
 import { MobileHeader } from './MobileHeader';
+import { useAppStore } from '@/store/useAppStore';
 
 export function AppShell({ children }: PropsWithChildren) {
   const { width } = useWindowDimensions();
   const pathname = usePathname();
+  const setLastVisitedPath = useAppStore((state) => state.setLastVisitedPath);
   const scrollRef = useRef<ScrollView>(null);
   const entrance = useRef(new Animated.Value(1)).current;
   const desktop = width >= 760;
   useEffect(() => {
+    if (pathname && pathname !== '/' && !pathname.startsWith('/auth/') && pathname !== '/consent' && pathname !== '/onboarding') {
+      setLastVisitedPath(pathname);
+    }
     scrollRef.current?.scrollTo({ y: 0, animated: false });
     entrance.setValue(0);
     Animated.spring(entrance, { toValue: 1, damping: 22, stiffness: 150, mass: .75, useNativeDriver: Platform.OS !== 'web' }).start();
-  }, [entrance, pathname]);
+  }, [entrance, pathname, setLastVisitedPath]);
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.workspace}>

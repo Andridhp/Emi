@@ -1,4 +1,4 @@
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@/components/MaterialCommunityIcons';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -7,12 +7,14 @@ import { ProfileHeader } from '@/components/ProfileHeader';
 import { useAuth } from '@/context/AuthContext';
 import { canCancelErasure, cancelDataErasureRequest, confirmationPhraseFor, DataErasureRequest, listDataErasureRequests, reauthenticateAndRequestAccountErasure } from '@/lib/dataErasure';
 import { colors, shadow } from '@/theme';
+import { useAppStore } from '@/store/useAppStore';
 
 const phrase = confirmationPhraseFor('account');
 
 export default function DataErasureScreen() {
   const router = useRouter();
-  const { demoSession, familyId, user } = useAuth();
+  const { demoSession, familyId, user, signOut } = useAuth();
+  const clearLocalWorkspace = useAppStore((state) => state.clearLocalWorkspace);
   const [requests, setRequests] = useState<DataErasureRequest[]>([]);
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -33,12 +35,13 @@ export default function DataErasureScreen() {
     if (confirmation !== phrase) return setError(`Escribe exactamente “${phrase}”.`);
     setBusy(true);
     try {
-      const request = demoSession
-        ? { requestId: 'demo-erasure', scope: 'account' as const, status: 'pending' as const, requestedAt: new Date().toISOString(), executeAfter: new Date(Date.now() + 7 * 86400000).toISOString() }
-        : familyId && user?.email ? await reauthenticateAndRequestAccountErasure({ familyId, email: user.email, password, confirmationPhrase: confirmation }) : undefined;
+      if (demoSession) {
+        clearLocalWorkspace(); await signOut(); router.replace('/'); return;
+      }
+      const request = familyId && user?.email ? await reauthenticateAndRequestAccountErasure({ familyId, email: user.email, password, confirmationPhrase: confirmation }) : undefined;
       if (!request) throw new Error('session_unavailable');
       setRequests((current) => [request, ...current]); setPassword(''); setConfirmation('');
-      setMessage(demoSession ? 'Simulación creada. No se envió ninguna solicitud ni se eliminarán datos.' : 'Solicitud registrada. Puedes cancelarla hasta que comience el procesamiento.');
+      setMessage('Solicitud registrada. Puedes cancelarla hasta que comience el procesamiento.');
     } catch (caught) {
       const code = caught instanceof Error ? caught.message : '';
       setError(code === 'reauthentication_failed' ? 'La contraseña no coincide. No se creó ninguna solicitud.' : 'No pudimos crear la solicitud. Tu cuenta y tus datos permanecen sin cambios.');
@@ -57,18 +60,16 @@ export default function DataErasureScreen() {
 
   return <AppShell><ProfileHeader eyebrow="PRIVACIDAD Y DATOS" />
     <Pressable accessibilityRole="link" onPress={() => router.push('/privacy')} style={styles.back}><MaterialCommunityIcons name="arrow-left" size={17} color={colors.sageDark} /><Text style={styles.backText}>Volver a Privacidad</Text></Pressable>
-    <View style={styles.hero}><View style={styles.heroIcon}><MaterialCommunityIcons name="shield-remove-outline" size={29} color="#8D4747" /></View><View style={{ flex: 1 }}><Text style={styles.title}>Eliminar cuenta y espacio familiar</Text><Text style={styles.subtitle}>Este recorrido está diseñado para evitar borrados accidentales y darte tiempo para cambiar de decisión.</Text></View></View>
+    <View style={styles.hero}><View style={styles.heroIcon}><MaterialCommunityIcons name="shield-remove-outline" size={29} color="#8D4747" /></View><View style={{ flex: 1 }}><Text style={styles.title}>{demoSession ? 'Eliminar datos de este dispositivo' : 'Eliminar cuenta y espacio familiar'}</Text><Text style={styles.subtitle}>{demoSession ? 'La eliminación local es inmediata y no puede deshacerse. Crea un respaldo antes si deseas conservar algo.' : 'Este recorrido está diseñado para evitar borrados accidentales y darte tiempo para cambiar de decisión.'}</Text></View></View>
 
-    {demoSession ? <View style={styles.demo}><MaterialCommunityIcons name="flask-outline" size={20} color="#806225" /><Text style={styles.demoText}>Estás en demostración. Puedes recorrer y cancelar una solicitud ficticia, pero Emi no enviará ni eliminará nada.</Text></View> : null}
+    {demoSession ? <View style={styles.demo}><MaterialCommunityIcons name="phone-alert" size={20} color="#806225" /><Text style={styles.demoText}>No existe una copia en nube. Al confirmar se borrarán realmente los perfiles, registros y metadatos locales de Emi.</Text></View> : null}
 
-    <Text style={styles.section}>QUÉ SUCEDERÍA</Text>
+    <Text style={styles.section}>QUÉ SUCEDERÁ</Text>
     <View style={styles.card}>
       <Step icon="download-outline" number="1" title="Conserva una copia" body="Antes de solicitarlo, vuelve a Privacidad y exporta los datos que quieras guardar." />
-      <Step icon="calendar-clock-outline" number="2" title="Tendrás siete días" body="Durante el periodo de recuperación puedes cancelar desde esta misma pantalla." />
-      <Step icon="folder-remove-outline" number="3" title="Se elimina el espacio familiar" body="Incluye perfiles, registros, documentos, reportes, permisos y vínculos compartidos." />
-      <Step icon="account-remove-outline" number="4" title="Después se elimina la cuenta" body="Un trabajador privado borra los archivos primero y reintenta la eliminación de identidad si el proveedor está temporalmente indisponible." last />
+      {demoSession ? <Step icon="cellphone-remove" number="2" title="Se borrará inmediatamente" body="Incluye perfiles, registros, preguntas, permisos y referencias de documentos guardadas por Emi en este dispositivo." last /> : <><Step icon="calendar-clock-outline" number="2" title="Tendrás siete días" body="Durante el periodo de recuperación puedes cancelar desde esta misma pantalla." /><Step icon="folder-remove-outline" number="3" title="Se elimina el espacio familiar" body="Incluye perfiles, registros, documentos, reportes, permisos y vínculos compartidos." /><Step icon="account-remove-outline" number="4" title="Después se elimina la cuenta" body="Un trabajador privado borra los archivos primero y reintenta la eliminación de identidad si el proveedor está temporalmente indisponible." last /></>}
     </View>
-    <View style={styles.warning}><MaterialCommunityIcons name="account-group-outline" size={20} color="#8D4747" /><Text style={styles.warningText}>En esta versión, la cuenta administradora es propietaria del espacio. Eliminarla también elimina los datos compartidos con los demás cuidadores. Avísales y exporta una copia antes de continuar.</Text></View>
+    <View style={styles.warning}><MaterialCommunityIcons name={demoSession ? 'backup-restore' : 'account-group-outline'} size={20} color="#8D4747" /><Text style={styles.warningText}>{demoSession ? 'El respaldo JSON es la única forma de recuperar posteriormente los registros estructurados. No incluye los PDFs o imágenes originales.' : 'En esta versión, la cuenta administradora es propietaria del espacio. Eliminarla también elimina los datos compartidos con los demás cuidadores. Avísales y exporta una copia antes de continuar.'}</Text></View>
 
     {activeRequest ? <>
       <Text style={styles.section}>SOLICITUD ACTIVA</Text>
@@ -80,7 +81,7 @@ export default function DataErasureScreen() {
       <View style={styles.form}>
         {!demoSession ? <><Text style={styles.label}>Contraseña actual</Text><TextInput accessibilityLabel="Contraseña actual" secureTextEntry value={password} onChangeText={setPassword} autoComplete="current-password" placeholder="Vuelve a autenticarte" placeholderTextColor="#A7B0AD" style={styles.input} /><Text style={styles.help}>La contraseña se envía directamente a Supabase Auth y Emi no la almacena.</Text></> : null}
         <Text style={styles.label}>Escribe la frase de confirmación</Text><View style={styles.phrase}><Text style={styles.phraseText}>{phrase}</Text></View><TextInput accessibilityLabel="Frase de confirmación" autoCapitalize="characters" value={confirmation} onChangeText={setConfirmation} placeholder={phrase} placeholderTextColor="#A7B0AD" style={styles.input} />
-        <Pressable accessibilityRole="button" disabled={busy || confirmation !== phrase || (!demoSession && !password)} onPress={() => void submit()} style={[styles.submit, (busy || confirmation !== phrase || (!demoSession && !password)) && styles.disabled]}>{busy ? <ActivityIndicator color="#FFF" /> : <MaterialCommunityIcons name="calendar-remove-outline" size={19} color="#FFF" />}<Text style={styles.submitText}>{busy ? 'Protegiendo la solicitud…' : demoSession ? 'Simular solicitud' : 'Programar eliminación'}</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={busy || confirmation !== phrase || (!demoSession && !password)} onPress={() => void submit()} style={[styles.submit, (busy || confirmation !== phrase || (!demoSession && !password)) && styles.disabled]}>{busy ? <ActivityIndicator color="#FFF" /> : <MaterialCommunityIcons name={demoSession ? 'delete-forever-outline' : 'calendar-remove-outline'} size={19} color="#FFF" />}<Text style={styles.submitText}>{busy ? 'Procesando…' : demoSession ? 'Eliminar datos locales' : 'Programar eliminación'}</Text></Pressable>
       </View>
     </>}
     {message ? <View style={styles.success}><MaterialCommunityIcons name="check-circle-outline" size={18} color={colors.sageDark} /><Text style={styles.successText}>{message}</Text></View> : null}

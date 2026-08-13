@@ -1,4 +1,4 @@
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@/components/MaterialCommunityIcons';
 
 export type NavItem = { label: string; href: string; icon: keyof typeof MaterialCommunityIcons.glyphMap };
 

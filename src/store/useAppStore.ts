@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { documents as initialDocuments, initialEvents, profiles as initialProfiles } from '@/data/demo';
 import { makeProfileId } from '@/lib/profiles';
+import type { PortableFamilyExport } from '@/lib/dataExport';
 import { SyncChangeRef, SyncConflict, syncKey, syncValueFingerprint, workspaceSyncBaseline } from '@/lib/syncConflicts';
 import { BirthRecord, Caregiver, ConsultationQuestion, ConsentPreferences, ConsentPurpose, DocumentRecord, EventKind, FamilyEvent, FamilyProfile, PostpartumRecord, PrenatalRecord } from '@/types/domain';
 
@@ -42,6 +43,8 @@ interface AppState {
   activeSessions: Partial<Record<TimedKind, ActiveSession>>;
   dismissedNoticeIds: string[];
   consultationQuestions: ConsultationQuestion[];
+  lastConsultationDates: Record<string, string>;
+  lastVisitedPath?: string;
   deletedEventIds: string[];
   deletedQuestionIds: string[];
   pendingSync?: PendingWorkspaceSync;
@@ -81,12 +84,16 @@ interface AppState {
   addConsultationQuestion: (text: string) => string | undefined;
   toggleConsultationQuestion: (id: string) => void;
   removeConsultationQuestion: (id: string) => void;
+  setLastVisitedPath: (path?: string) => void;
   markSyncPending: (items?: SyncChangeRef[]) => void;
   markSyncAttempt: () => number | undefined;
   markSyncFailed: (revision: number, message?: string) => void;
   markSyncComplete: (revision: number) => void;
   setSyncConflicts: (conflicts: SyncConflict[]) => void;
   resolveSyncConflict: (key: string, resolution: 'local' | 'cloud') => void;
+  restoreLocalBackup: (backup: PortableFamilyExport) => void;
+  setLastConsultationDate: (profileId: string, date: string) => void;
+  clearLocalWorkspace: () => void;
 }
 
 const minutesBetween = (start: string, end: string) => Math.max(1, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000));
@@ -108,6 +115,8 @@ export const useAppStore = create<AppState>()(persist((set, get) => ({
   activeSessions: {},
   dismissedNoticeIds: [],
   consultationQuestions: [],
+  lastConsultationDates: {},
+  lastVisitedPath: undefined,
   deletedEventIds: [],
   deletedQuestionIds: [],
   pendingSync: undefined,
@@ -115,18 +124,26 @@ export const useAppStore = create<AppState>()(persist((set, get) => ({
   syncConflicts: [],
   prepareWorkspace: (identity, ownerName = '') => set((state): Partial<AppState> => {
     if (state.workspaceIdentity === identity) return state;
+    if (identity === 'local') {
+      if (state.workspaceIdentity === 'demo' && state.hasCompletedOnboarding) return { workspaceIdentity: 'local' };
+      return {
+        workspaceIdentity: 'local', activeProfileId: '', profiles: [], caregivers: [], prenatalRecords: {}, birthRecords: {}, postpartumRecords: {},
+        consentPreferences: { localStorage: true, documentAnalysis: false, aiAssistant: false, voice: false, productAnalytics: false }, profileNames: {}, caregiverName: '', hasCompletedOnboarding: false,
+        events: [], documents: [], activeSessions: {}, dismissedNoticeIds: [], consultationQuestions: [], lastConsultationDates: {}, lastVisitedPath: state.lastVisitedPath, deletedEventIds: [], deletedQuestionIds: [], pendingSync: undefined, syncBaseline: {}, syncConflicts: [], lastRemovedEvent: undefined, lastAddedEventId: undefined
+      };
+    }
     if (identity === 'demo') return {
       workspaceIdentity: 'demo', activeProfileId: 'emilia', profiles: initialProfiles,
       caregivers: [{ id: 'caregiver-admin', name: 'Kevin', relationship: 'Administrador familiar', access: 'admin', profileAccess: { emilia: 'manager', pregnancy: 'manager' } }],
       prenatalRecords: { pregnancy: { profileId: 'pregnancy', planningStarted: '2026-01-05', lastMenstrualPeriod: '2026-02-01', dueDate: '2026-11-08', dueDateConfirmedBy: 'Ultrasonido', folicAcidStarted: '2026-01-12', supplements: 'Multivitamínico prenatal', primaryProfessional: 'Ginecología y obstetricia', updatedAt: '2026-07-15T00:00:00.000Z' } },
       birthRecords: {}, postpartumRecords: {}, consentPreferences: { localStorage: true, documentAnalysis: false, aiAssistant: false, voice: false, productAnalytics: false },
       profileNames: { emilia: 'Emilia', pregnancy: 'Embarazo' }, caregiverName: '', hasCompletedOnboarding: false,
-      events: initialEvents, documents: initialDocuments, activeSessions: {}, dismissedNoticeIds: [], consultationQuestions: [], deletedEventIds: [], deletedQuestionIds: [], pendingSync: undefined, syncBaseline: {}, syncConflicts: [], lastRemovedEvent: undefined, lastAddedEventId: undefined
+      events: initialEvents, documents: initialDocuments, activeSessions: {}, dismissedNoticeIds: [], consultationQuestions: [], lastConsultationDates: {}, lastVisitedPath: state.lastVisitedPath, deletedEventIds: [], deletedQuestionIds: [], pendingSync: undefined, syncBaseline: {}, syncConflicts: [], lastRemovedEvent: undefined, lastAddedEventId: undefined
     };
     return {
       workspaceIdentity: identity, activeProfileId: '', profiles: [], caregivers: [{ id: `owner-${identity}`, name: ownerName || 'Mi cuenta', relationship: 'Administrador familiar', access: 'admin', profileAccess: {} }],
       prenatalRecords: {}, birthRecords: {}, postpartumRecords: {}, consentPreferences: { localStorage: true, documentAnalysis: false, aiAssistant: false, voice: false, productAnalytics: false },
-      profileNames: {}, caregiverName: ownerName, hasCompletedOnboarding: false, events: [], documents: [], activeSessions: {}, dismissedNoticeIds: [], consultationQuestions: [], deletedEventIds: [], deletedQuestionIds: [], pendingSync: undefined, syncBaseline: {}, syncConflicts: [], lastRemovedEvent: undefined, lastAddedEventId: undefined
+      profileNames: {}, caregiverName: ownerName, hasCompletedOnboarding: false, events: [], documents: [], activeSessions: {}, dismissedNoticeIds: [], consultationQuestions: [], lastConsultationDates: {}, lastVisitedPath: state.lastVisitedPath, deletedEventIds: [], deletedQuestionIds: [], pendingSync: undefined, syncBaseline: {}, syncConflicts: [], lastRemovedEvent: undefined, lastAddedEventId: undefined
     };
   }),
   hydrateCloudWorkspace: (profiles, events, caregivers, documents, prenatalRecords, birthRecords, postpartumRecords, consultationQuestions) => set((state) => {
@@ -208,6 +225,37 @@ export const useAppStore = create<AppState>()(persist((set, get) => ({
   },
   updateDocument: (id, changes) => set((state) => ({ documents: state.documents.map((document) => document.id === id ? { ...document, ...changes } : document) })),
   removeDocument: (id) => set((state) => ({ documents: state.documents.filter((document) => document.id !== id) })),
+  setLastConsultationDate: (profileId, date) => set((state) => ({ lastConsultationDates: { ...state.lastConsultationDates, [profileId]: date } })),
+  clearLocalWorkspace: () => set({
+    workspaceIdentity: 'local', activeProfileId: '', profiles: [], caregivers: [], prenatalRecords: {}, birthRecords: {}, postpartumRecords: {},
+    consentPreferences: { localStorage: true, documentAnalysis: false, aiAssistant: false, voice: false, productAnalytics: false }, profileNames: {}, caregiverName: '', hasCompletedOnboarding: false,
+    events: [], documents: [], activeSessions: {}, dismissedNoticeIds: [], consultationQuestions: [], lastConsultationDates: {}, lastVisitedPath: undefined, deletedEventIds: [], deletedQuestionIds: [], pendingSync: undefined, syncBaseline: {}, syncConflicts: [], lastRemovedEvent: undefined, lastAddedEventId: undefined
+  }),
+  restoreLocalBackup: (backup) => set((state) => {
+    const profiles = backup.profiles.map((profile) => ({ ...profile }));
+    const profileNames = Object.fromEntries(profiles.map((profile) => [profile.id, profile.name]));
+    const activeProfileId = profiles.some((profile) => profile.id === backup.activeProfileId) ? backup.activeProfileId! : profiles[0]?.id ?? '';
+    return {
+      workspaceIdentity: state.workspaceIdentity,
+      activeProfileId,
+      profiles,
+      profileNames,
+      caregivers: backup.caregivers.map((caregiver) => ({ ...caregiver, profileAccess: { ...(caregiver.profileAccess ?? {}) } })),
+      prenatalRecords: Object.fromEntries(backup.prenatalRecords.map((item) => [item.profileId, { ...item }])),
+      birthRecords: Object.fromEntries(backup.birthRecords.map((item) => [item.profileId, { ...item }])),
+      postpartumRecords: Object.fromEntries(backup.postpartumRecords.map((item) => [item.profileId, { ...item }])),
+      events: backup.events.map((event) => ({ ...event, data: event.data ? { ...event.data } : undefined })),
+      documents: backup.documents.map((document) => ({ ...document, localOnly: true, uploadStatus: undefined })),
+      consultationQuestions: backup.consultationQuestions.map((question) => ({ ...question })),
+      lastConsultationDates: { ...(backup.lastConsultationDates ?? {}) },
+      lastVisitedPath: state.lastVisitedPath,
+      consentPreferences: { localStorage: true, documentAnalysis: false, aiAssistant: false, voice: false, productAnalytics: false },
+      caregiverName: backup.caregivers.find((caregiver) => caregiver.access === 'admin')?.name ?? '',
+      hasCompletedOnboarding: profiles.length > 0,
+      activeSessions: {}, dismissedNoticeIds: [], deletedEventIds: [], deletedQuestionIds: [], pendingSync: undefined,
+      syncBaseline: {}, syncConflicts: [], lastRemovedEvent: undefined, lastAddedEventId: undefined
+    };
+  }),
   updateEvent: (id, changes) => set((state) => ({ events: state.events.map((event) => event.id === id ? { ...event, ...changes } : event) })),
   deleteEvent: (id) => set((state) => ({
     events: state.events.filter((event) => event.id !== id),
@@ -248,6 +296,7 @@ export const useAppStore = create<AppState>()(persist((set, get) => ({
     consultationQuestions: state.consultationQuestions.filter((question) => question.id !== id),
     deletedQuestionIds: state.deletedQuestionIds.includes(id) ? state.deletedQuestionIds : [...state.deletedQuestionIds, id]
   })),
+  setLastVisitedPath: (lastVisitedPath) => set({ lastVisitedPath }),
   markSyncPending: (items = [{ entity: 'workspace', id: '*', operation: 'upsert' }]) => set((state) => {
     const now = new Date().toISOString();
     const mergedItems = new Map((state.pendingSync?.items ?? []).map((item) => [syncKey(item.entity, item.id), item]));
@@ -336,6 +385,8 @@ export const useAppStore = create<AppState>()(persist((set, get) => ({
     activeSessions: state.activeSessions,
     dismissedNoticeIds: state.dismissedNoticeIds,
     consultationQuestions: state.consultationQuestions,
+    lastConsultationDates: state.lastConsultationDates,
+    lastVisitedPath: state.lastVisitedPath,
     deletedEventIds: state.deletedEventIds,
     deletedQuestionIds: state.deletedQuestionIds,
     pendingSync: state.pendingSync,
