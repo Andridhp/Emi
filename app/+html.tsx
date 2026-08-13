@@ -11,9 +11,9 @@ export default function Root({ children }: PropsWithChildren) {
         <meta name="theme-color" content="#64857A" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <link rel="manifest" href="/manifest.json" />
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-        <link rel="icon" href="/favicon.png" />
+        <link rel="manifest" href="./manifest.json" />
+        <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+        <link rel="icon" href="./favicon.png" />
         <ScrollViewStyleReset />
       </head>
       <body>{children}</body>
