@@ -68,6 +68,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const hydratingRef = useRef(false);
   const internalSyncStateRef = useRef(false);
   const syncInFlightRef = useRef<Promise<boolean> | null>(null);
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const remoteRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activateUserWorkspace = async (nextUser: User) => {
     useAppStore.getState().prepareWorkspace(`user:${nextUser.id}`, nextUser.user_metadata?.display_name || 'Mi cuenta');
@@ -91,6 +93,22 @@ export function AuthProvider({ children }: PropsWithChildren) {
       return { profiles: [], events: [], caregivers: [], documents: [], prenatalRecords: {}, birthRecords: {}, postpartumRecords: {}, consultationQuestions: [] };
     }
   };
+
+  const refreshRemoteWorkspace = useCallback(async () => {
+    if (!user || !familyId || demoSession || !supabase) return;
+    if (refreshInFlightRef.current) return refreshInFlightRef.current;
+    const operation = (async () => {
+      try {
+        await activateUserWorkspace(user);
+      } catch {
+        setSyncStatus('error');
+      }
+    })().finally(() => {
+      refreshInFlightRef.current = null;
+    });
+    refreshInFlightRef.current = operation;
+    return operation;
+  }, [demoSession, familyId, user]);
 
   useEffect(() => {
     let mounted = true;
@@ -168,6 +186,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!user || !familyId || demoSession) return;
+    const queueRemoteRefresh = () => {
+      if (remoteRefreshTimerRef.current) clearTimeout(remoteRefreshTimerRef.current);
+      remoteRefreshTimerRef.current = setTimeout(() => {
+        void refreshRemoteWorkspace();
+      }, 900);
+    };
+    const channel = supabase?.channel(`family-audit-${familyId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_log', filter: `family_id=eq.${familyId}` }, () => {
+        if (!hydratingRef.current) queueRemoteRefresh();
+      })
+      .subscribe();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = useAppStore.subscribe((state, previous) => {
       if (hydratingRef.current || internalSyncStateRef.current || state.syncConflicts !== previous.syncConflicts) return;
@@ -186,21 +215,31 @@ export function AuthProvider({ children }: PropsWithChildren) {
     });
     const retryInterval = setInterval(() => {
       if (useAppStore.getState().pendingSync) void runQueuedSync();
+      else queueRemoteRefresh();
     }, 20000);
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active' && useAppStore.getState().pendingSync) void runQueuedSync();
+      if (nextState === 'active') {
+        if (useAppStore.getState().pendingSync) void runQueuedSync();
+        else queueRemoteRefresh();
+      }
     });
-    const handleOnline = () => { if (useAppStore.getState().pendingSync) void runQueuedSync(); };
+    const handleOnline = () => {
+      if (useAppStore.getState().pendingSync) void runQueuedSync();
+      else queueRemoteRefresh();
+    };
     if (typeof window !== 'undefined') window.addEventListener('online', handleOnline);
     if (useAppStore.getState().pendingSync) timer = setTimeout(() => { void runQueuedSync(); }, 250);
+    else queueRemoteRefresh();
     return () => {
       if (timer) clearTimeout(timer);
+      if (remoteRefreshTimerRef.current) clearTimeout(remoteRefreshTimerRef.current);
       clearInterval(retryInterval);
       appStateSubscription.remove();
       if (typeof window !== 'undefined') window.removeEventListener('online', handleOnline);
+      void channel?.unsubscribe();
       unsubscribe();
     };
-  }, [demoSession, familyId, runQueuedSync, user]);
+  }, [demoSession, familyId, refreshRemoteWorkspace, runQueuedSync, user]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user, loading, demoSession, isAuthenticated: Boolean(user || demoSession), backendAvailable: !backendIsDemo,
