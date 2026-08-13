@@ -1,6 +1,7 @@
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
@@ -19,14 +20,25 @@ const publicPaths = ['/', '/auth/sign-in', '/auth/sign-up', '/auth/forgot-passwo
 function AuthGate() {
   const { loading, isAuthenticated, user, demoSession, familyId, syncStatus } = useAuth(); const pathname = usePathname(); const router = useRouter();
   const hasCompletedOnboarding = useAppStore((state) => state.hasCompletedOnboarding);
+  const lastVisitedPath = useAppStore((state) => state.lastVisitedPath);
+  const [iconsReady, setIconsReady] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    MaterialCommunityIcons.loadFont().catch(() => undefined).finally(() => { if (mounted) setIconsReady(true); });
+    return () => { mounted = false; };
+  }, []);
+
   useEffect(() => {
     if (loading) return;
     if (!isAuthenticated && !publicPaths.includes(pathname)) return router.replace('/');
-    if (!user || demoSession || syncStatus === 'loading' || publicPaths.includes(pathname) || pathname === '/consent' || pathname === '/onboarding') return;
-    if (!familyId) router.replace('/consent');
-    else if (!hasCompletedOnboarding) router.replace('/onboarding');
-  }, [demoSession, familyId, hasCompletedOnboarding, isAuthenticated, loading, pathname, router, syncStatus, user]);
-  if (loading) return <View style={styles.loading}><ActivityIndicator color={colors.sageDark} /></View>;
+    if (isAuthenticated && syncStatus !== 'loading' && pathname !== '/consent' && pathname !== '/onboarding' && !publicPaths.includes(pathname)) {
+      if (!familyId) { router.replace('/consent'); return; }
+      if (!hasCompletedOnboarding) { router.replace('/onboarding'); return; }
+    }
+    if (isAuthenticated && pathname === '/' && lastVisitedPath && lastVisitedPath !== '/' && !lastVisitedPath.startsWith('/auth/') && lastVisitedPath !== '/consent' && lastVisitedPath !== '/onboarding') router.replace(lastVisitedPath as never);
+  }, [familyId, hasCompletedOnboarding, isAuthenticated, lastVisitedPath, loading, pathname, router, syncStatus]);
+  if (loading || !iconsReady) return <View style={styles.loading}><ActivityIndicator color={colors.sageDark} /></View>;
   return <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#F7F4EE' } }} />;
 }
 const styles = StyleSheet.create({ loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F7F4EE' } });

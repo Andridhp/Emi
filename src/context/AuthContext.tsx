@@ -213,7 +213,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const workspace = await activateUserWorkspace(data.user);
       const invitationToken = await pendingInvitation();
       if (invitationToken) return { ok: true, nextPath: `/invite?token=${encodeURIComponent(invitationToken)}` };
-      return { ok: true, nextPath: !workspace.familyId ? '/consent' : workspace.profiles.length ? '/home' : '/onboarding' };
+      const resumePath = useAppStore.getState().lastVisitedPath;
+      const canResume = Boolean(resumePath && resumePath !== '/' && !resumePath.startsWith('/auth/') && resumePath !== '/consent' && resumePath !== '/onboarding');
+      return { ok: true, nextPath: !workspace.familyId ? '/consent' : workspace.profiles.length ? (canResume ? (resumePath as Href) : '/home') : '/onboarding' };
     },
     signUp: async (name, email, password) => {
       if (!supabase) return { ok: false, message: 'La creación de cuentas estará disponible al conectar el servidor seguro.' };
