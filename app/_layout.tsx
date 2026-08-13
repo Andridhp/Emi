@@ -33,11 +33,11 @@ function AuthGate() {
     if (loading) return;
     if (!isAuthenticated && !publicPaths.includes(pathname)) return router.replace('/');
     if (isAuthenticated && syncStatus !== 'loading' && pathname !== '/consent' && pathname !== '/onboarding' && !publicPaths.includes(pathname)) {
-      if (!familyId) { router.replace('/consent'); return; }
+      if (!demoSession && !familyId) { router.replace('/consent'); return; }
       if (!hasCompletedOnboarding) { router.replace('/onboarding'); return; }
     }
     if (isAuthenticated && pathname === '/' && lastVisitedPath && lastVisitedPath !== '/' && !lastVisitedPath.startsWith('/auth/') && lastVisitedPath !== '/consent' && lastVisitedPath !== '/onboarding') router.replace(lastVisitedPath as never);
-  }, [familyId, hasCompletedOnboarding, isAuthenticated, lastVisitedPath, loading, pathname, router, syncStatus]);
+  }, [demoSession, familyId, hasCompletedOnboarding, isAuthenticated, lastVisitedPath, loading, pathname, router, syncStatus]);
   if (loading || !iconsReady) return <View style={styles.loading}><ActivityIndicator color={colors.sageDark} /></View>;
   return <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#F7F4EE' } }} />;
 }
